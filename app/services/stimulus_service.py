@@ -1,13 +1,13 @@
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.errors import NotFoundError
 from app.core.settings import settings
 from app.core.storage import ensure_bucket, upload_object
-from app.db.models import ScreenModel, ScreenTransitionModel, StimulusModel
+from app.db.models import ScreenModel, ScreenTransitionModel, StimulusModel, UIElementModel
 
 
 class StimulusService:
@@ -75,27 +75,73 @@ class StimulusService:
             raise NotFoundError(f"Stimulus {stimulus_id} not found")
         return stimulus
 
-    async def get_latest_for_study(self, study_id: uuid.UUID) -> StimulusModel:
-        """The stimulus a simulation run should perceive (planning/07-simulation-engine.md)
-        — most recently created, screens/elements eager-loaded for the screen graph."""
-        stimulus = await self._session.scalar(
-            select(StimulusModel)
+    async def list_screens_for_study(self, study_id: uuid.UUID) -> list[ScreenModel]:
+        """Every screen across every stimulus upload for the study, elements
+        eager-loaded. A multi-screen prototype flow is represented as *multiple*
+        `stimuli` rows today (`create_with_asset` creates exactly one screen per
+        upload), so "the screen graph for a study" (planning/07-simulation-engine.md)
+        has to span every stimulus, not just one — see `05-stimulus-engine.md`."""
+        result = await self._session.scalars(
+            select(ScreenModel)
+            .join(StimulusModel, ScreenModel.stimulus_id == StimulusModel.id)
             .where(StimulusModel.study_id == study_id)
-            .options(selectinload(StimulusModel.screens).selectinload(ScreenModel.elements))
-            .order_by(StimulusModel.created_at.desc())
+            .options(selectinload(ScreenModel.elements))
+            .order_by(ScreenModel.created_at)
         )
-        if stimulus is None:
-            raise NotFoundError(f"No stimulus defined for study {study_id}")
-        return stimulus
+        return list(result)
 
-    async def list_transitions_for_stimulus(
-        self, stimulus_id: uuid.UUID
-    ) -> list[ScreenTransitionModel]:
-        """The screen graph's edges (LLD §7) — joined through `screens` since a
-        transition doesn't carry its own stimulus_id."""
+    async def list_transitions_for_study(self, study_id: uuid.UUID) -> list[ScreenTransitionModel]:
+        """The screen graph's edges (LLD §7), scoped to the whole study for the
+        same reason as `list_screens_for_study`."""
         result = await self._session.scalars(
             select(ScreenTransitionModel)
             .join(ScreenModel, ScreenTransitionModel.from_screen_id == ScreenModel.id)
-            .where(ScreenModel.stimulus_id == stimulus_id)
+            .join(StimulusModel, ScreenModel.stimulus_id == StimulusModel.id)
+            .where(StimulusModel.study_id == study_id)
         )
         return list(result)
+
+    async def save_screen_analysis(
+        self, screen: ScreenModel, elements: list[dict], raw_analysis: dict
+    ) -> None:
+        """Persists the VisionProvider's output (planning/05): `raw_analysis` is
+        kept on `screens.analysis` as an audit trail of what the model actually
+        returned; `elements` become normalized `ui_elements` rows. `properties`
+        is where `semantic_role`/`interactable` live — see that doc's note on why
+        `ui_elements` has no dedicated columns for them."""
+        screen.analysis = raw_analysis
+        for element in elements:
+            self._session.add(
+                UIElementModel(
+                    screen_id=screen.id,
+                    element_key=element["element_key"],
+                    type=element["type"],
+                    text=element.get("text"),
+                    bbox=list(element["bbox"]),
+                    properties={
+                        "semantic_role": element["semantic_role"],
+                        "interactable": element["interactable"],
+                    },
+                )
+            )
+        await self._session.flush()
+
+    async def replace_transitions_for_study(
+        self, study_id: uuid.UUID, transitions: list[dict]
+    ) -> None:
+        """Wholesale replace (LLD §7's screen graph is re-derived, not appended
+        to) — re-running inference after a new stimulus is analyzed must not
+        leave stale edges from a smaller screen set around. `transitions`:
+        `[{"from_screen_id", "trigger_element_id", "action", "to_screen_id"}]`."""
+        screen_ids = (
+            select(ScreenModel.id)
+            .join(StimulusModel, ScreenModel.stimulus_id == StimulusModel.id)
+            .where(StimulusModel.study_id == study_id)
+        )
+        await self._session.execute(
+            delete(ScreenTransitionModel).where(
+                ScreenTransitionModel.from_screen_id.in_(screen_ids)
+            )
+        )
+        self._session.add_all([ScreenTransitionModel(**t) for t in transitions])
+        await self._session.flush()

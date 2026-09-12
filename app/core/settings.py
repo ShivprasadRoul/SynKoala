@@ -1,6 +1,17 @@
+import os
 from functools import cached_property
 
+from dotenv import load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# pydantic-settings parses `.env` into this class's own fields but never exports it to
+# the real process environment. Pydantic AI's model providers (e.g. OpenRouterProvider,
+# planning/05-stimulus-engine.md) read their API keys via `os.getenv` directly, so `.env`
+# has to land there too — this is a no-op if the vars are already set (e.g. in prod).
+load_dotenv()
+# Pydantic AI prints an interactive-looking banner on every first call per agent unless
+# this is set — noise in a worker's logs, not a REPL.
+os.environ.setdefault("PYDANTIC_AI_NO_BANNER", "1")
 
 
 class Settings(BaseSettings):
@@ -24,6 +35,11 @@ class Settings(BaseSettings):
     figma_client_secret: str | None = None
     figma_redirect_uri: str | None = None
     figma_token_encryption_key: str | None = None
+
+    # Stimulus Engine's VisionProvider (planning/05-stimulus-engine.md) — a Pydantic AI
+    # model identifier. Routed through OpenRouter (one API key covers many underlying
+    # models) — Pydantic AI reads OPENROUTER_API_KEY itself, not a setting here.
+    vision_model: str = "openrouter:openai/gpt-4o-mini"
 
     @cached_property
     def supabase_jwt_issuer(self) -> str:
