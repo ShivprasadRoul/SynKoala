@@ -1,0 +1,35 @@
+# gcloud run deploy --source . uses THIS file (not .dockerignore/.gitignore) to
+# decide what gets uploaded to Cloud Build — without it, the whole repo
+# (including mobile/node_modules, mobile/android build output, web/node_modules)
+# gets zipped and shipped, which is multiple GB of irrelevant native/JS build
+# artifacts for a Python backend deploy.
+.gcloudignore
+.git/
+.gitignore
+
+# Other apps in this repo — not part of the backend image
+mobile/
+web/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# Docs kept local (also gitignored at the repo root)
+planning/
+Synthetic_Koala_Architecture_Docs/
+CLAUDE.md
+projectstruct.md
+
+# Secrets / local env
+.env
+.env.*
+!.env.example
+
+# Misc
+.DS_Store
+.claude/
