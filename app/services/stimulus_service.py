@@ -99,3 +99,16 @@ class StimulusService:
             .where(ScreenModel.stimulus_id == stimulus_id)
         )
         return list(result)
+
+    async def has_analyzed_screens(self, study_id: uuid.UUID) -> bool:
+        """Readiness gate for `SimulationUseCase.create_run`
+        (planning/06-study-orchestrator.md item 1): at least one element has
+        actually been detected somewhere in the study's stimuli (planning/05's
+        VisionProvider has run for it) — not just that a stimulus was uploaded."""
+        stimuli = await self.list_for_study(study_id)
+        return any(
+            element
+            for stimulus in stimuli
+            for screen in stimulus.screens
+            for element in screen.elements
+        )

@@ -7,6 +7,7 @@ from app.db.models import ParticipantRecordModel, SimulationRunModel, TaskModel,
 from app.services.audience_service import AudienceService
 from app.services.job_service import JobService
 from app.services.simulation_run_service import SimulationRunService
+from app.services.stimulus_service import StimulusService
 from app.services.study_service import StudyService
 from app.services.task_service import TaskService
 
@@ -14,17 +15,15 @@ from app.services.task_service import TaskService
 class SimulationUseCase:
     """Orchestration for the Simulation resource (planning/02-api.md /
     planning/06-study-orchestrator.md). Composes StudyService, TaskService,
-    AudienceService, SimulationRunService, and JobService — fans out one
-    simulate_participant job per participant (LLD §19). The job handler itself
-    (the LangGraph loop, planning/07-simulation-engine.md) isn't built yet, so
-    runs sit at RUNNING with all jobs PENDING until a worker exists — that
-    boundary is intentional for this pass."""
+    AudienceService, StimulusService, SimulationRunService, and JobService —
+    fans out one simulate_participant job per participant (LLD §19)."""
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
         self._studies = StudyService(session)
         self._tasks = TaskService(session)
         self._audiences = AudienceService(session)
+        self._stimuli = StimulusService(session)
         self._runs = SimulationRunService(session)
         self._jobs = JobService(session)
 
@@ -62,6 +61,11 @@ class SimulationUseCase:
             raise LifecycleError(
                 f"Study {study_id} must be READY before a simulation can be started "
                 f"(currently {study.status})"
+            )
+        if not await self._stimuli.has_analyzed_screens(study_id):
+            raise LifecycleError(
+                f"Study {study_id} has no analyzed stimulus yet — "
+                "run POST /studies/:id/stimulus/analyze first"
             )
         task = await self._resolve_task(study_id, task_id)
         participants = await self._resolve_participants(study_id)
