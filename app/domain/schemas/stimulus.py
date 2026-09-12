@@ -12,7 +12,10 @@ class UIElementRead(BaseModel):
     element_key: str
     type: str
     text: str | None
-    bbox: dict
+    # [x1, y1, x2, y2] — app/agents/providers/vision_provider.py's BBox shape
+    # (a plain 4-length array, not a dict, chosen there for structured-output
+    # schema compatibility across model providers).
+    bbox: list[int] = Field(min_length=4, max_length=4)
     properties: dict | None
     created_at: datetime
 

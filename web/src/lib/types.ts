@@ -116,7 +116,8 @@ export interface UIElement {
   element_key: string;
   type: string;
   text: string | null;
-  bbox: Record<string, unknown>;
+  // [x1, y1, x2, y2] — app/agents/providers/vision_provider.py's BBox shape.
+  bbox: [number, number, number, number];
   properties: Record<string, unknown> | null;
   created_at: string;
 }
