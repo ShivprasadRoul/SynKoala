@@ -1,7 +1,7 @@
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import NotFoundError
@@ -98,6 +98,30 @@ class SimulationRunService:
         await self._session.flush()
         return run
 
+    async def abandon_pending_participant_runs(self, run_id: uuid.UUID) -> None:
+        """Closes the gap `SimulationUseCase.cancel_run` used to leave open:
+        `JobService.cancel_pending` flips a still-queued `simulate_participant`
+        job straight to CANCELLED, so it's never claimed and never reaches
+        `complete_participant_run` — without this, that job's `participant_runs`
+        row would stay PENDING forever, and `is_run_complete`/`finalize_run`
+        could never see the run as done. Only PENDING rows are touched here —
+        an IN_PROGRESS one has a job a worker already claimed and is actively
+        running; it finishes and records its own real outcome normally,
+        cancel or not."""
+        await self._session.execute(
+            update(ParticipantRunModel)
+            .where(
+                ParticipantRunModel.simulation_run_id == run_id,
+                ParticipantRunModel.status == "PENDING",
+            )
+            .values(
+                status="ABANDONED",
+                final_outcome={"reason": "run_cancelled"},
+                completed_at=datetime.now(UTC),
+            )
+        )
+        await self._session.flush()
+
     async def get_participant_run(self, participant_run_id: uuid.UUID) -> ParticipantRunModel:
         participant_run = await self._session.get(ParticipantRunModel, participant_run_id)
         if participant_run is None:
@@ -112,17 +136,27 @@ class SimulationRunService:
     async def finalize_run(self, run_id: uuid.UUID) -> SimulationRunModel:
         """Called once every participant_run for a run has reached a terminal
         status — planning/06-study-orchestrator.md's aggregation trigger, minus
-        the actual aggregation (planning/09), which hasn't landed yet."""
+        the actual aggregation (planning/09), which hasn't landed yet.
+
+        A run already `CANCELLING` always finalizes to `CANCELLED`, regardless
+        of how individual participants happened to end up — some may have
+        completed successfully before the cancel reached them (their own job
+        was already IN_PROGRESS and ran to completion), but the researcher
+        explicitly asked to cancel, so the run itself must not silently become
+        COMPLETED/FAILED as if nothing was cancelled."""
         run = await self.get_by_id(run_id)
-        succeeded = await self._session.scalar(
-            select(func.count())
-            .select_from(ParticipantRunModel)
-            .where(
-                ParticipantRunModel.simulation_run_id == run_id,
-                ParticipantRunModel.status == "COMPLETED",
+        if run.status == "CANCELLING":
+            run.status = "CANCELLED"
+        else:
+            succeeded = await self._session.scalar(
+                select(func.count())
+                .select_from(ParticipantRunModel)
+                .where(
+                    ParticipantRunModel.simulation_run_id == run_id,
+                    ParticipantRunModel.status == "COMPLETED",
+                )
             )
-        )
-        run.status = "COMPLETED" if succeeded else "FAILED"
+            run.status = "COMPLETED" if succeeded else "FAILED"
         run.completed_at = datetime.now(UTC)
         await self._session.flush()
         return run

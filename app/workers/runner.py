@@ -54,6 +54,14 @@ async def _process_job(job_id: uuid.UUID) -> None:
                 raise ValueError(f"No handler registered for job_type={job.job_type!r}")
             await handler(session, job.payload)
         except Exception as exc:
+            # A handler that fails mid-flush (e.g. a DB constraint violation)
+            # leaves the session's transaction already rolled back server-side
+            # — touching `job` below without rolling back the session first
+            # raises `PendingRollbackError`, which used to escape this
+            # `except` block entirely and crash the whole worker process
+            # (see app/services/stimulus_service.py's null-byte-stripping fix,
+            # landed alongside this one, for the case that first surfaced it).
+            await session.rollback()
             job.attempts += 1
             job.status = "PENDING" if job.attempts < MAX_ATTEMPTS else "FAILED"
             logger.warning(
@@ -86,7 +94,17 @@ async def _worker_loop(worker_id: int) -> None:
         if job_id is None:
             await asyncio.sleep(POLL_INTERVAL_SECONDS)
             continue
-        await _process_job(job_id)
+        try:
+            await _process_job(job_id)
+        except Exception:
+            # Belt-and-suspenders: _process_job already catches a handler's
+            # own exceptions, but this loop is one of NUM_WORKERS tasks under
+            # one asyncio.gather() in run_forever() — anything that still
+            # escapes it (a bug in the retry bookkeeping itself, a dropped
+            # DB connection mid-commit, ...) would otherwise propagate through
+            # gather() and take down every other worker with it, exactly the
+            # failure this module's whole design is meant to prevent.
+            logger.exception("worker %s: job %s failed unexpectedly", worker_id, job_id)
 
 
 async def run_forever() -> None:

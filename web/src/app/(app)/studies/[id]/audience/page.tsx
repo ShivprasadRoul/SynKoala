@@ -10,7 +10,12 @@ import { Button } from "@/components/ui/Button";
 import { Card, CardDescription, CardTitle } from "@/components/ui/Card";
 import { HelperText, Input, Label, Textarea } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
-import { createAudience, generatePopulation, getAudience } from "@/lib/api/audiences";
+import {
+  createAudience,
+  generatePopulation,
+  getAudience,
+  listParticipants,
+} from "@/lib/api/audiences";
 import { getStudy } from "@/lib/api/studies";
 import type { AudienceDefinition, GeneratedPersona, Participant, TraitBand } from "@/lib/types";
 import { TRAIT_BANDS } from "@/lib/types";
@@ -174,8 +179,16 @@ export default function AudiencePage() {
   const [populationSizeOverride, setPopulationSizeOverride] = useState<number | null>(null);
   const populationSize = populationSizeOverride ?? study?.population_size ?? 50;
   const [seed, setSeed] = useState<string>("");
-  const [lastGenerated, setLastGenerated] = useState<Participant[] | null>(null);
   const [viewingPersona, setViewingPersona] = useState<GeneratedPersona | null>(null);
+
+  // Every participant generated so far, persisted server-side — fetched on
+  // every visit (not just held from the last `generate` response) so a page
+  // refresh still shows what was generated minutes or days ago.
+  const { data: participants } = useQuery({
+    queryKey: ["participants", studyId],
+    queryFn: () => listParticipants(studyId),
+    enabled: Boolean(audience),
+  });
 
   const generateMutation = useMutation({
     mutationFn: () =>
@@ -183,7 +196,7 @@ export default function AudiencePage() {
         population_size: populationSize,
         seed: seed ? Number(seed) : null,
       }),
-    onSuccess: (participants) => setLastGenerated(participants),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["participants", studyId] }),
   });
 
   if (isLoading) return <p className="text-[14px] text-ink-muted">Loading audience…</p>;
@@ -455,13 +468,14 @@ export default function AudiencePage() {
               : "Failed to generate personas"}
           </p>
         )}
-        {lastGenerated && (
+        {participants && participants.length > 0 && (
           <div className="mt-5 border-t border-hairline pt-4">
             <p className="font-mono text-[13px] tabular-nums text-ink">
-              +{lastGenerated.length} synthetic users generated this session
+              {participants.length} synthetic user{participants.length === 1 ? "" : "s"} generated
+              so far
             </p>
             <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {lastGenerated
+              {participants
                 .filter((participant): participant is Participant & { persona: GeneratedPersona } =>
                   Boolean(participant.persona)
                 )
@@ -474,9 +488,9 @@ export default function AudiencePage() {
                   />
                 ))}
             </div>
-            {lastGenerated.length > 9 && (
+            {participants.length > 9 && (
               <p className="mt-2 text-[12px] text-ink-tertiary">
-                +{lastGenerated.length - 9} more not shown
+                +{participants.length - 9} more not shown
               </p>
             )}
           </div>

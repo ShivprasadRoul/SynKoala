@@ -18,12 +18,16 @@ class _FakeJob:
 class _FakeSession:
     def __init__(self, job: _FakeJob) -> None:
         self._job = job
+        self.rollback_calls = 0
 
     async def get(self, model, job_id):
         return self._job
 
     async def commit(self) -> None:
         pass
+
+    async def rollback(self) -> None:
+        self.rollback_calls += 1
 
 
 @asynccontextmanager
@@ -52,6 +56,7 @@ async def test_permanent_failure_hook_fires_only_on_the_final_attempt(monkeypatc
 
     assert job.status == "FAILED"
     permanent_failure_hook.assert_awaited_once_with(fake_session, job.payload)
+    assert fake_session.rollback_calls == 1
 
 
 async def test_permanent_failure_hook_does_not_fire_before_the_final_attempt(monkeypatch):

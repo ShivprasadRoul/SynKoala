@@ -43,6 +43,17 @@ async def get_audience(
     return AudienceRead.model_validate(audience)
 
 
+@audiences_router_v1.get(AudiencesRoutes.PARTICIPANTS, response_model=list[ParticipantRead])
+async def list_participants(
+    study_id: uuid.UUID,
+    current_user: UserModel = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> list[ParticipantRead]:
+    use_case = AudienceUseCase(session)
+    participants = await use_case.list_participants(current_user, study_id)
+    return [ParticipantRead.model_validate(p) for p in participants]
+
+
 @audiences_router_v1.post(AudiencesRoutes.GENERATE, response_model=list[ParticipantRead])
 async def generate_population(
     study_id: uuid.UUID,

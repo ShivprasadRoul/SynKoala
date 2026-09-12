@@ -9,6 +9,7 @@ class AuthRoutes:
     BASE_PATH = "auth"
     FIGMA_AUTHORIZE = f"/{BASE_PATH}/figma/authorize"
     FIGMA_CALLBACK = f"/{BASE_PATH}/figma/callback"
+    FIGMA_STATUS = f"/{BASE_PATH}/figma/status"
 
 
 class UsersRoutes:
@@ -29,6 +30,7 @@ class AudiencesRoutes:
     BASE_PATH = "studies/{study_id}/audience"
     LIST_CREATE = f"/{BASE_PATH}"
     GENERATE = f"/{BASE_PATH}/generate"
+    PARTICIPANTS = f"/{BASE_PATH}/participants"
 
 
 class StimuliRoutes:

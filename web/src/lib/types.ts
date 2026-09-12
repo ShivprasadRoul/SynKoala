@@ -143,6 +143,24 @@ export interface Task {
   created_at: string;
 }
 
+// app/domain/schemas/benchmark.py — optional per study (planning/12-web-app.md
+// §5.5). `task_outcomes`/`interaction_rates`/`segment_labels`/`attention_data`
+// are all freeform JSONB backend-side; this app only ever writes/reads
+// `task_outcomes.completion_rate` (the one field the Validation Engine's
+// task_completion_agreement formula needs), leaving the rest as raw JSON a
+// researcher can paste in.
+export interface Benchmark {
+  id: string;
+  study_id: string;
+  source: string | null;
+  task_outcomes: Record<string, unknown> | null;
+  interaction_rates: Record<string, unknown> | null;
+  segment_labels: Record<string, unknown> | null;
+  attention_data: Record<string, unknown> | null;
+  version: number;
+  created_at: string;
+}
+
 export interface UIElement {
   id: string;
   screen_id: string;

@@ -57,7 +57,18 @@ class SimulationUseCase:
         seed: int | None,
     ) -> SimulationRunModel:
         study = await self._studies.get_owned(user, study_id)
-        if study.status != "READY":
+        # READY: the common case, first run. RUNNING/COMPLETED: a *later* run
+        # for the same study — required, not just tolerated: run_stability_cv
+        # (planning/10) needs >= 5 repeated runs of the same config, and
+        # baseline comparisons (random/saliency_only/task_only) are each their
+        # own run against the same study. `create_run` itself is what moves a
+        # study to RUNNING, and `STUDY_STATUS_TRANSITIONS` has no path back
+        # from RUNNING/COMPLETED to READY — gating on `== "READY"` here would
+        # make a second-ever run for any study permanently impossible. Each
+        # run's own lifecycle is already independently tracked on
+        # `simulation_runs.status`; the study-level status is about setup
+        # readiness, not "has a run ever happened yet."
+        if study.status not in ("READY", "RUNNING", "COMPLETED"):
             raise LifecycleError(
                 f"Study {study_id} must be READY before a simulation can be started "
                 f"(currently {study.status})"
@@ -107,6 +118,14 @@ class SimulationUseCase:
             raise LifecycleError(f"Cannot cancel a run in status {run.status}")
         run = await self._runs.mark_cancelling(run)
         await self._jobs.cancel_pending("simulate_participant", "simulation_run_id", str(run_id))
+        # A cancelled job never reaches complete_participant_run, so its
+        # participant_runs row would otherwise stay PENDING forever — abandon
+        # those directly, then finalize immediately if that was every
+        # remaining participant (no more jobs left running to trigger
+        # simulate_participant.py's own finalize on completion).
+        await self._runs.abandon_pending_participant_runs(run_id)
+        if await self._runs.is_run_complete(run_id):
+            run = await self._runs.finalize_run(run_id)
         await self._session.commit()
         return run
 

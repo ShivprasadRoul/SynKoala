@@ -2,11 +2,12 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/Button";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { getAudience } from "@/lib/api/audiences";
-import { updateStudy } from "@/lib/api/studies";
+import { deleteStudy, updateStudy } from "@/lib/api/studies";
 import type { Study } from "@/lib/types";
 
 function relativeTime(iso: string): string {
@@ -24,6 +25,7 @@ function relativeTime(iso: string): string {
 // before, just relocated per the redesign.
 export function StudyHeader({ study }: { study: Study }) {
   const queryClient = useQueryClient();
+  const router = useRouter();
   const { data: audience } = useQuery({
     queryKey: ["audience", study.id],
     queryFn: () => getAudience(study.id),
@@ -34,16 +36,40 @@ export function StudyHeader({ study }: { study: Study }) {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["study", study.id] }),
   });
 
+  const deleteMutation = useMutation({
+    mutationFn: () => deleteStudy(study.id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["studies"] });
+      router.push("/dashboard");
+    },
+  });
+
+  function handleDelete() {
+    if (window.confirm(`Delete "${study.name}"? This can't be undone from the UI.`)) {
+      deleteMutation.mutate();
+    }
+  }
+
   const canPublish = Boolean(audience);
 
   return (
     <div className="flex flex-col gap-4">
-      <Link
-        href="/dashboard"
-        className="inline-flex w-fit items-center gap-1.5 text-[13px] font-medium text-ink-muted transition-colors hover:text-ink"
-      >
-        <span aria-hidden>←</span> Studies
-      </Link>
+      <div className="flex items-center justify-between">
+        <Link
+          href="/dashboard"
+          className="inline-flex w-fit items-center gap-1.5 text-[13px] font-medium text-ink-muted transition-colors hover:text-ink"
+        >
+          <span aria-hidden>←</span> Studies
+        </Link>
+        <button
+          type="button"
+          onClick={handleDelete}
+          disabled={deleteMutation.isPending}
+          className="text-[12px] font-medium text-ink-tertiary transition-colors hover:text-semantic-warn"
+        >
+          {deleteMutation.isPending ? "Deleting…" : "Delete study"}
+        </button>
+      </div>
 
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
@@ -82,6 +108,13 @@ export function StudyHeader({ study }: { study: Study }) {
       {publish.isError && (
         <p className="text-[13px] text-semantic-warn">
           {publish.error instanceof Error ? publish.error.message : "Couldn't update the study"}
+        </p>
+      )}
+      {deleteMutation.isError && (
+        <p className="text-[13px] text-semantic-warn">
+          {deleteMutation.error instanceof Error
+            ? deleteMutation.error.message
+            : "Couldn't delete the study"}
         </p>
       )}
     </div>

@@ -16,12 +16,19 @@ export function createAudience(studyId: string, input: { name: string; definitio
   return apiFetch<Audience>(`/studies/${studyId}/audience`, { body: input });
 }
 
-// Adds to the population — it doesn't replace it, and there's no endpoint to list
-// the cumulative total (planning/12-web-app.md §5.2), so callers only learn the
-// size of the batch just generated, not a running total.
+// Adds to the population — it doesn't replace it. The response is just the
+// batch just generated; call listParticipants for the running total (what a
+// page refresh needs to show everything generated so far, not just this call).
 export function generatePopulation(
   studyId: string,
   input: { population_size: number; seed?: number | null }
 ) {
   return apiFetch<Participant[]>(`/studies/${studyId}/audience/generate`, { body: input });
+}
+
+// Every participant/persona generated so far for the study's current audience
+// — persisted by generatePopulation, read back here (app/api/v1/audiences.py's
+// list_participants) so a page refresh doesn't lose them.
+export function listParticipants(studyId: string): Promise<Participant[]> {
+  return apiFetch<Participant[]>(`/studies/${studyId}/audience/participants`);
 }

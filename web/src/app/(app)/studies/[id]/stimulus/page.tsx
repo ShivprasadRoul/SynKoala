@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams } from "next/navigation";
 import { useState } from "react";
 
-import { getFigmaAuthorizeUrl } from "@/lib/api/auth";
+import { getFigmaAuthorizeUrl, getFigmaStatus } from "@/lib/api/auth";
 import { analyzeStimuli, listStimuli, uploadStimulus } from "@/lib/api/stimulus";
 
 import { Button } from "@/components/ui/Button";
@@ -24,6 +24,19 @@ export default function StimulusPage() {
   // token and persists real screens/elements/transitions directly, no vision
   // model needed (planning/05-stimulus-engine.md's Figma import path). ---
   const [figmaUrl, setFigmaUrl] = useState("");
+
+  // Whether *this account* already has a Figma OAuth connection
+  // (app/api/v1/auth.py:figma_status) — without this, the "Connect Figma"
+  // button had no way to reflect an already-completed connection and always
+  // showed the same label. Connecting is a full-page redirect to Figma and
+  // back through the backend's own callback (never this page directly), so
+  // there's no client-side "done" event to react to — React Query's default
+  // refetch-on-window-focus/remount is what picks up the change once the
+  // researcher returns to this tab.
+  const { data: figmaStatus } = useQuery({
+    queryKey: ["figma-status"],
+    queryFn: getFigmaStatus,
+  });
 
   const importFigmaMutation = useMutation({
     mutationFn: async () => {
@@ -79,15 +92,36 @@ export default function StimulusPage() {
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Card className="flex flex-col">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-3">
             <CardTitle>Import from Figma</CardTitle>
-            <button
-              type="button"
-              onClick={() => connectFigmaMutation.mutate()}
-              className="text-[12px] font-semibold text-ink-muted transition-colors hover:text-ink"
-            >
-              {connectFigmaMutation.isPending ? "Redirecting…" : "Connect Figma"}
-            </button>
+            {figmaStatus?.connected ? (
+              <div className="flex items-center gap-3">
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-primary-soft px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.04em] text-primary-deep">
+                  <span className="h-1.5 w-1.5 rounded-full bg-primary-deep" aria-hidden />
+                  Connected
+                </span>
+                <button
+                  type="button"
+                  onClick={() => connectFigmaMutation.mutate()}
+                  className="text-[12px] font-medium text-ink-tertiary transition-colors hover:text-ink"
+                >
+                  {connectFigmaMutation.isPending ? "Redirecting…" : "Reconnect"}
+                </button>
+              </div>
+            ) : (
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => connectFigmaMutation.mutate()}
+                disabled={connectFigmaMutation.isPending}
+              >
+                <span
+                  className="mr-2 inline-block h-1.5 w-1.5 rounded-full border border-hairline-strong bg-surface-3 align-middle"
+                  aria-hidden
+                />
+                {connectFigmaMutation.isPending ? "Redirecting…" : "Connect Figma"}
+              </Button>
+            )}
           </div>
           <CardDescription className="mt-2">
             Fetches every frame in the file directly from Figma — real bounding boxes and

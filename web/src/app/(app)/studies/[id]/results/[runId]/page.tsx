@@ -1,23 +1,35 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams } from "next/navigation";
 
 import { MetricsGrid } from "@/components/MetricsGrid";
+import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { StatusBadge } from "@/components/ui/StatusBadge";
-import { getMetrics, getSimulationRun, isTerminalRunStatus } from "@/lib/api/simulations";
+import {
+  cancelSimulationRun,
+  getMetrics,
+  getSimulationRun,
+  isTerminalRunStatus,
+} from "@/lib/api/simulations";
 
 const POLL_INTERVAL_MS = 3000;
 
 export default function ResultsPage() {
   const { runId } = useParams<{ id: string; runId: string }>();
+  const queryClient = useQueryClient();
 
   const { data: run } = useQuery({
     queryKey: ["simulation-run", runId],
     queryFn: () => getSimulationRun(runId),
     refetchInterval: (query) =>
       query.state.data && isTerminalRunStatus(query.state.data.status) ? false : POLL_INTERVAL_MS,
+  });
+
+  const cancelMutation = useMutation({
+    mutationFn: () => cancelSimulationRun(runId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["simulation-run", runId] }),
   });
 
   const { data: metrics } = useQuery({
@@ -41,8 +53,28 @@ export default function ResultsPage() {
             {run.seed !== null && ` · seed ${run.seed}`}
           </p>
         </div>
-        <StatusBadge status={run.status} />
+        <div className="flex items-center gap-3">
+          <StatusBadge status={run.status} />
+          {run.status === "RUNNING" && (
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={cancelMutation.isPending}
+              onClick={() => cancelMutation.mutate()}
+            >
+              {cancelMutation.isPending ? "Cancelling…" : "Cancel run"}
+            </Button>
+          )}
+        </div>
       </Card>
+
+      {cancelMutation.isError && (
+        <p className="text-[13px] text-semantic-warn">
+          {cancelMutation.error instanceof Error
+            ? cancelMutation.error.message
+            : "Failed to cancel the run"}
+        </p>
+      )}
 
       {!isTerminalRunStatus(run.status) && (
         <p className="text-[13px] text-ink-tertiary">

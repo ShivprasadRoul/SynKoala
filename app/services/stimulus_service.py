@@ -1,3 +1,4 @@
+import re
 import uuid
 
 from sqlalchemy import delete, select
@@ -9,6 +10,32 @@ from app.core.errors import NotFoundError
 from app.core.settings import settings
 from app.core.storage import ensure_bucket, upload_object
 from app.db.models import ScreenModel, ScreenTransitionModel, StimulusModel, UIElementModel
+
+
+def _strip_null_bytes(value):
+    """Postgres `text`/`jsonb` columns can't store `\\u0000` at all (a hard
+    Postgres limitation, not a bug in this app) — and a vision model has no
+    reason to know that, so it can and does emit one (observed in the wild: a
+    button's extracted `text` came back as a literal `\\u0000`). Without this,
+    that one element poisons the whole `UPDATE screens SET analysis=...`
+    statement and raises `UntranslatableCharacterError` — which used to crash
+    the *entire* worker process (see the `runner.py` fix alongside this one),
+    not just fail that one job."""
+    if isinstance(value, str):
+        return value.replace("\x00", "")
+    if isinstance(value, dict):
+        return {k: _strip_null_bytes(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_strip_null_bytes(v) for v in value]
+    return value
+
+
+def _slugify_filename(filename: str | None) -> str | None:
+    if not filename:
+        return None
+    stem = filename.rsplit(".", 1)[0]
+    slug = re.sub(r"[^a-z0-9]+", "_", stem.lower()).strip("_")
+    return slug or None
 
 
 def _infer_interactable(element_type: str, properties: dict) -> bool:
@@ -47,6 +74,7 @@ class StimulusService:
         file_bytes: bytes | None,
         file_content_type: str | None,
         metadata: dict | None,
+        original_filename: str | None = None,
     ) -> StimulusModel:
         stimulus = StimulusModel(
             study_id=study_id, type=stimulus_type, source_url=source_url, metadata_=metadata
@@ -63,12 +91,37 @@ class StimulusService:
                 file_content_type or "application/octet-stream",
             )
             stimulus.source_url = stored_path
+            screen_key = await self._unique_screen_key(
+                study_id, _slugify_filename(original_filename) or "screen"
+            )
             self._session.add(
-                ScreenModel(stimulus_id=stimulus.id, screen_key="screen_01", image_url=stored_path)
+                ScreenModel(stimulus_id=stimulus.id, screen_key=screen_key, image_url=stored_path)
             )
             await self._session.flush()
 
         return await self.get_with_screens(stimulus.id)
+
+    async def _unique_screen_key(self, study_id: uuid.UUID, base_key: str) -> str:
+        """A multi-screenshot upload (a study's own multi-screen prototype flow
+        is represented as *multiple* `stimuli` rows — see `list_screens_for_
+        study`) used to give every screen the literal, hardcoded `screen_key`
+        `"screen_01"` regardless of upload. That collapsed `resolve_starting_
+        screen`/`infer_transitions` (both key screens by `screen_key` alone,
+        across the whole study) onto a single indistinguishable screen the
+        moment a second screenshot was uploaded — a task's `starting_point`
+        could never reliably name one screen among several, and the inferred
+        screen graph resolved every transition to whichever screen happened to
+        be last in a `{screen_key: screen}` dict comprehension. Deriving the
+        key from the uploaded filename (falling back to `"screen"`, then
+        de-duplicating against this study's existing screens) gives each
+        screen a real, distinct, human-typeable identity."""
+        existing = {screen.screen_key for screen in await self.list_screens_for_study(study_id)}
+        if base_key not in existing:
+            return base_key
+        suffix = 2
+        while f"{base_key}_{suffix}" in existing:
+            suffix += 1
+        return f"{base_key}_{suffix}"
 
     async def list_for_study(self, study_id: uuid.UUID) -> list[StimulusModel]:
         result = await self._session.scalars(
@@ -181,8 +234,9 @@ class StimulusService:
         returned; `elements` become normalized `ui_elements` rows. `properties`
         is where `semantic_role`/`interactable` live — see that doc's note on why
         `ui_elements` has no dedicated columns for them."""
-        screen.analysis = raw_analysis
+        screen.analysis = _strip_null_bytes(raw_analysis)
         for element in elements:
+            element = _strip_null_bytes(element)
             self._session.add(
                 UIElementModel(
                     screen_id=screen.id,

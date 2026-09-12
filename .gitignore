@@ -25,3 +25,8 @@ ai-agent-skills-backend-development.zip
 
 # Scratch files from ad-hoc debugging (e.g. local Figma embed reproduction probes)
 .tmp_probe/
+
+# Ad-hoc test screenshots pasted in for manual e2e runs — not project source
+.test_image/
+tests/fixtures/*/logs/
+tests/fixtures/*/results/

@@ -28,3 +28,9 @@ export function updateStudy(
 ) {
   return apiFetch<Study>(`/studies/${studyId}`, { method: "PATCH", body: input });
 }
+
+// Soft-delete (app/services/study_service.py sets deleted_at, doesn't drop the
+// row) — 204 No Content, apiFetch resolves that to undefined.
+export function deleteStudy(studyId: string): Promise<void> {
+  return apiFetch<void>(`/studies/${studyId}`, { method: "DELETE" });
+}

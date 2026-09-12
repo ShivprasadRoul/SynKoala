@@ -40,6 +40,18 @@ class AudienceUseCase:
         await self._studies.get_owned(user, study_id)
         return await self._audiences.get_latest_for_study(study_id)
 
+    async def list_participants(
+        self, user: UserModel, study_id: uuid.UUID
+    ) -> list[ParticipantRecordModel]:
+        """Every previously generated participant/persona for the study's
+        current audience — `generate_population` already persists these
+        (`AudienceService.create_participants`), but until this method there
+        was no way to read them back except from a `generate` call's own
+        response, which a page refresh (or a second visit) loses entirely."""
+        await self._studies.get_owned(user, study_id)
+        audience = await self._audiences.get_latest_for_study(study_id)
+        return await self._audiences.list_participants(audience.id)
+
     async def generate_population(
         self, user: UserModel, study_id: uuid.UUID, population_size: int, seed: int | None
     ) -> list[ParticipantRecordModel]:

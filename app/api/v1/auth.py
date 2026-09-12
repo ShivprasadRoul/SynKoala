@@ -7,9 +7,23 @@ from app.core.auth import get_current_user
 from app.core.settings import settings
 from app.db.models import UserModel
 from app.db.session import get_session
+from app.domain.schemas.auth import FigmaStatusRead
 from app.usecases.auth import FigmaOAuthUseCase
 
 auth_router_v1 = APIRouter(tags=AuthRoutes.TAGS)
+
+
+@auth_router_v1.get(AuthRoutes.FIGMA_STATUS, response_model=FigmaStatusRead)
+async def figma_status(
+    current_user: UserModel = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> FigmaStatusRead:
+    """Whether *this* signed-in user currently has a linked Figma account —
+    what the "Connect Figma" button's connected/disconnected state should
+    actually reflect, instead of always showing the same label regardless of
+    whether `figma_authorize`/`figma_callback` already ran successfully."""
+    use_case = FigmaOAuthUseCase(session)
+    return FigmaStatusRead(connected=await use_case.is_connected(current_user))
 
 
 @auth_router_v1.get(AuthRoutes.FIGMA_AUTHORIZE)

@@ -32,6 +32,7 @@ class StimulusUseCase:
         file_bytes: bytes | None,
         file_content_type: str | None,
         metadata: dict | None,
+        original_filename: str | None = None,
     ) -> StimulusModel:
         await self._studies.get_owned(user, study_id)
         if stimulus_type == "figma" and await self._figma_oauth.get_connection(user.id) is None:
@@ -46,7 +47,13 @@ class StimulusUseCase:
                 "(GET /api/v1/auth/figma/authorize)."
             )
         stimulus = await self._stimuli.create_with_asset(
-            study_id, stimulus_type, source_url, file_bytes, file_content_type, metadata
+            study_id,
+            stimulus_type,
+            source_url,
+            file_bytes,
+            file_content_type,
+            metadata,
+            original_filename,
         )
         await self._session.commit()
         return stimulus

@@ -20,6 +20,13 @@ class FigmaOAuthUseCase:
         self._figma.require_configured()
         return self._figma.build_authorize_url(user.id)
 
+    async def is_connected(self, user: UserModel) -> bool:
+        """Backs the "Connect Figma" button's actual connected/disconnected
+        state (planning/05-stimulus-engine.md) — before this, the frontend had
+        no way to know a Figma account was already linked short of trying to
+        create a `figma`-type stimulus and reading the resulting error."""
+        return await self._figma.get_connection(user.id) is not None
+
     async def handle_callback(self, code: str, state: str) -> FigmaConnectionModel:
         self._figma.require_configured()
         user_id = self._figma.decode_state(state)

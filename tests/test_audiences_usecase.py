@@ -65,6 +65,26 @@ async def test_generate_population_samples_one_persona_per_participant():
     )
 
 
+async def test_list_participants_returns_every_previously_generated_participant():
+    """Closes the gap a page refresh used to expose: `generate_population`
+    always persisted participants, but nothing could read them back except a
+    `generate` call's own response."""
+    use_case = AudienceUseCase(_NoOpSession())
+    use_case._studies = AsyncMock()
+    use_case._studies.get_owned.return_value = None
+
+    audience = Mock(id=uuid.uuid4())
+    use_case._audiences = AsyncMock()
+    use_case._audiences.get_latest_for_study.return_value = audience
+    stored_participants = [Mock(), Mock()]
+    use_case._audiences.list_participants.return_value = stored_participants
+
+    result = await use_case.list_participants(user=Mock(), study_id=uuid.uuid4())
+
+    assert result == stored_participants
+    use_case._audiences.list_participants.assert_awaited_once_with(audience.id)
+
+
 def test_persona_sampler_is_reproducible_for_the_same_seed():
     definition = {"demographics": {"country": "India", "age_range": [20, 40]}}
     sampler = PersonaSampler()
