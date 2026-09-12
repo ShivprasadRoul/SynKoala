@@ -4,10 +4,30 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.agents.types import ElementView, ScreenGraph, ScreenView, TransitionView
 from app.core.errors import NotFoundError
 from app.core.settings import settings
 from app.core.storage import ensure_bucket, upload_object
 from app.db.models import ScreenModel, ScreenTransitionModel, StimulusModel, UIElementModel
+
+
+def _infer_interactable(element_type: str, properties: dict) -> bool:
+    if "interactable" in properties:
+        return bool(properties["interactable"])
+    return element_type in ("button", "input", "link", "select", "checkbox", "radio")
+
+
+def _element_view_from_orm(element: UIElementModel) -> ElementView:
+    properties = element.properties or {}
+    return ElementView(
+        id=element.id,
+        element_key=element.element_key,
+        type=element.type,
+        text=element.text,
+        bbox=tuple(element.bbox),
+        semantic_role=properties.get("semantic_role"),
+        interactable=_infer_interactable(element.type, properties),
+    )
 
 
 class StimulusService:
@@ -94,6 +114,56 @@ class StimulusService:
             .where(StimulusModel.study_id == study_id)
         )
         return list(result)
+
+    async def get_screen_graph(self, study_id: uuid.UUID) -> ScreenGraph:
+        """Builds the Simulation Engine's own `ScreenGraph` shape (planning/07) from
+        this study's persisted `screens`/`ui_elements`/`screen_transitions` — the one
+        place that conversion happens, shared by `simulate_participant.py` (planning/
+        07) and `aggregate_run.py` (planning/09's BFS baseline), instead of each job
+        duplicating it."""
+        screens = await self.list_screens_for_study(study_id)
+        transitions = await self.list_transitions_for_study(study_id)
+        screen_views = {
+            screen.id: ScreenView(
+                id=screen.id,
+                screen_key=screen.screen_key,
+                width=screen.width,
+                height=screen.height,
+                elements=[_element_view_from_orm(element) for element in screen.elements],
+            )
+            for screen in screens
+        }
+        transition_views = [
+            TransitionView(
+                from_screen_id=t.from_screen_id,
+                trigger_element_id=t.trigger_element_id,
+                action=t.action,
+                to_screen_id=t.to_screen_id,
+            )
+            for t in transitions
+        ]
+        return ScreenGraph(screens=screen_views, transitions=transition_views)
+
+    async def get_element_key_map(self, study_id: uuid.UUID) -> dict[uuid.UUID, str]:
+        """`element_id -> element_key` for every element in the study — the
+        Validation Engine (planning/10) needs this to join `metrics.element_id`
+        (a synthetic run's own UUIDs) against `human_benchmarks.interaction_
+        rates`/`attention_data`, which can only ever name elements by their
+        stable `element_key` (a human benchmark uploader has no way to know a
+        synthetic run's internal ids)."""
+        screens = await self.list_screens_for_study(study_id)
+        return {
+            element.id: element.element_key for screen in screens for element in screen.elements
+        }
+
+    async def get_screen_key_map(self, study_id: uuid.UUID) -> dict[uuid.UUID, str]:
+        """`screen_id -> screen_key` for every screen in the study — the
+        Insight Engine (planning/11) needs this the same way
+        `get_element_key_map` serves the Validation Engine: a `dead_end_rate`
+        citation is per-screen, and only `screen_key` means anything outside
+        this run's own internal ids."""
+        screens = await self.list_screens_for_study(study_id)
+        return {screen.id: screen.screen_key for screen in screens}
 
     async def has_analyzed_screens(self, study_id: uuid.UUID) -> bool:
         """Readiness gate for `SimulationUseCase.create_run`

@@ -76,7 +76,7 @@ class SimulationUseCase:
             )
         selected = participants[:population_size]
 
-        run = await self._runs.create_run(study_id, population_size, config, seed)
+        run = await self._runs.create_run(study_id, population_size, config, seed, task_id=task.id)
 
         for participant in selected:
             participant_run = await self._runs.create_participant_run(run.id, participant.id)

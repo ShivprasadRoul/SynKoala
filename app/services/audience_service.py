@@ -45,6 +45,19 @@ class AudienceService:
             raise NotFoundError(f"Participant {participant_id} not found")
         return participant
 
+    async def list_by_ids(
+        self, participant_ids: list[uuid.UUID]
+    ) -> dict[uuid.UUID, ParticipantRecordModel]:
+        """Bulk lookup for the Analytics Engine's segment analysis
+        (planning/09) — one query for a whole run's participants rather than
+        one `get_participant` per `participant_run`."""
+        if not participant_ids:
+            return {}
+        result = await self._session.scalars(
+            select(ParticipantRecordModel).where(ParticipantRecordModel.id.in_(participant_ids))
+        )
+        return {p.id: p for p in result}
+
     async def create_participants(
         self,
         audience_id: uuid.UUID,

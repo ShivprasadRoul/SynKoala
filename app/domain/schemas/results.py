@@ -42,6 +42,7 @@ class MetricRead(BaseModel):
     level: str
     metric: str
     element_id: uuid.UUID | None
+    screen_id: uuid.UUID | None
     segment: str | None
     value: float | None
     sample_size: int | None

@@ -4,11 +4,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.workers.jobs.aggregate_run import handle_aggregate_run
 from app.workers.jobs.analyze_stimulus import handle_analyze_stimulus
+from app.workers.jobs.generate_insights import handle_generate_insights
 from app.workers.jobs.import_figma_prototype import handle_import_figma_prototype
 from app.workers.jobs.simulate_participant import (
     handle_simulate_participant,
     handle_simulate_participant_permanent_failure,
 )
+from app.workers.jobs.validate_run import handle_validate_run
 
 JobHandler = Callable[[AsyncSession, dict], Awaitable[None]]
 
@@ -16,6 +18,8 @@ HANDLERS: dict[str, JobHandler] = {
     "analyze_stimulus": handle_analyze_stimulus,
     "simulate_participant": handle_simulate_participant,
     "aggregate_run": handle_aggregate_run,
+    "validate_run": handle_validate_run,
+    "generate_insights": handle_generate_insights,
     "import_figma_prototype": handle_import_figma_prototype,
 }
 

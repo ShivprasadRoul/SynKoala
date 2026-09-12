@@ -6,16 +6,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.graphs.simulation_graph import run_simulation
 from app.agents.providers.participant_model import get_participant_model
-from app.agents.types import (
-    ElementView,
-    ParticipantDraft,
-    ScreenGraph,
-    ScreenView,
-    TaskContext,
-    TransitionView,
-)
+from app.agents.types import ParticipantDraft, TaskContext
 from app.core.errors import LifecycleError
-from app.db.models import ObservationModel, ScreenModel, ScreenTransitionModel, TaskModel
+from app.db.models import ObservationModel, TaskModel
 from app.services.audience_service import AudienceService
 from app.services.job_service import JobService
 from app.services.simulation_run_service import SimulationRunService
@@ -23,54 +16,6 @@ from app.services.stimulus_service import StimulusService
 from app.services.task_service import TaskService
 
 _TERMINAL_STATUS = {"COMPLETED": "COMPLETED", "FAILED": "FAILED", "ABANDONED": "ABANDONED"}
-
-
-def _infer_interactable(element_type: str, properties: dict) -> bool:
-    if "interactable" in properties:
-        return bool(properties["interactable"])
-    return element_type in ("button", "input", "link", "select", "checkbox", "radio")
-
-
-def _element_view_from_orm(element) -> ElementView:
-    properties = element.properties or {}
-    return ElementView(
-        id=element.id,
-        element_key=element.element_key,
-        type=element.type,
-        text=element.text,
-        bbox=tuple(element.bbox),
-        semantic_role=properties.get("semantic_role"),
-        interactable=_infer_interactable(element.type, properties),
-    )
-
-
-def _screen_graph_from_orm(
-    screens: list[ScreenModel], transitions: list[ScreenTransitionModel]
-) -> ScreenGraph:
-    """Converts the Stimulus Engine's persisted rows (planning/05) into the
-    Simulation Engine's own types (planning/07). `properties` is where the
-    VisionProvider's `semantic_role`/`interactable` fields live — `ui_elements`
-    has no dedicated columns for them (LLD §3)."""
-    screen_views = {
-        screen.id: ScreenView(
-            id=screen.id,
-            screen_key=screen.screen_key,
-            width=screen.width,
-            height=screen.height,
-            elements=[_element_view_from_orm(element) for element in screen.elements],
-        )
-        for screen in screens
-    }
-    transition_views = [
-        TransitionView(
-            from_screen_id=t.from_screen_id,
-            trigger_element_id=t.trigger_element_id,
-            action=t.action,
-            to_screen_id=t.to_screen_id,
-        )
-        for t in transitions
-    ]
-    return ScreenGraph(screens=screen_views, transitions=transition_views)
 
 
 def _task_context_from_orm(task: TaskModel) -> TaskContext:
@@ -95,9 +40,10 @@ async def _finalize_run_and_notify(
         if run.status == "COMPLETED":
             # First link of the aggregate_run -> validate_run -> generate_insights
             # chain (planning/06's "Job chain") — the rest is each of those jobs'
-            # own responsibility to enqueue on completion, once they exist
-            # (planning/09,10,11). None of them are built yet, so the chain
-            # currently always stops (cleanly) at aggregate_run.
+            # own responsibility to enqueue on completion. aggregate_run (planning/09)
+            # and validate_run (planning/10) are both real now; generate_insights
+            # (planning/11) isn't, so the chain currently stops (cleanly, via the
+            # same claimed/retried/permanently-failed stub path) there.
             await jobs.enqueue("aggregate_run", {"simulation_run_id": str(run_id)})
 
     run = await runs.get_by_id(run_id)
@@ -144,16 +90,14 @@ async def handle_simulate_participant(session: AsyncSession, payload: dict) -> N
     participant_run = await runs.get_participant_run(participant_run_id)
     participant_record = await audiences.get_participant(participant_id)
     task = await tasks.get_by_id(task_id)
-    screens = await stimuli.list_screens_for_study(study_id)
-    transitions = await stimuli.list_transitions_for_study(study_id)
+    screen_graph = await stimuli.get_screen_graph(study_id)
 
-    if not any(screen.elements for screen in screens):
+    if not any(screen.elements for screen in screen_graph.screens.values()):
         raise LifecycleError(
             f"Study {study_id} has no analyzed screens yet "
             "(planning/05-stimulus-engine.md's VisionProvider hasn't run for its stimuli)"
         )
 
-    screen_graph = _screen_graph_from_orm(screens, transitions)
     task_context = _task_context_from_orm(task)
     participant = ParticipantDraft(
         id=participant_record.id,

@@ -59,6 +59,15 @@ class StudyService:
             raise NotFoundError(f"Study {study_id} not found")
         return study
 
+    async def get_by_id(self, study_id: uuid.UUID) -> StudyModel:
+        """No ownership check — for job handlers (planning/11's Insight
+        Engine) that already only ever see a `study_id` reached through a
+        `simulation_runs` row, not a request from a specific user."""
+        study = await self._session.get(StudyModel, study_id)
+        if study is None:
+            raise NotFoundError(f"Study {study_id} not found")
+        return study
+
     async def update(
         self,
         study: StudyModel,

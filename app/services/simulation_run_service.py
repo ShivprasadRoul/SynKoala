@@ -22,10 +22,12 @@ class SimulationRunService:
         population_size: int,
         config: dict | None,
         seed: int | None,
+        task_id: uuid.UUID | None = None,
         source: str = "SYNTHETIC",
     ) -> SimulationRunModel:
         run = SimulationRunModel(
             study_id=study_id,
+            task_id=task_id,
             population_size=population_size,
             status="RUNNING",
             config=config,
@@ -132,6 +134,25 @@ class SimulationRunService:
             .where(ParticipantRunModel.simulation_run_id == run_id)
         )
         return total or 0
+
+    async def list_sibling_runs(
+        self, study_id: uuid.UUID, task_id: uuid.UUID | None, exclude_run_id: uuid.UUID
+    ) -> list[SimulationRunModel]:
+        """Completed `SYNTHETIC` runs of the same study+task, other than the one
+        being validated — the Validation Engine (planning/10) buckets these by
+        `config["participant_model"]` in Python (not a JSONB filter here) to
+        find baseline runs (a specific participant model) and stability
+        siblings (repeats of the same model with different seeds)."""
+        stmt = select(SimulationRunModel).where(
+            SimulationRunModel.study_id == study_id,
+            SimulationRunModel.status == "COMPLETED",
+            SimulationRunModel.source == "SYNTHETIC",
+            SimulationRunModel.id != exclude_run_id,
+        )
+        if task_id is not None:
+            stmt = stmt.where(SimulationRunModel.task_id == task_id)
+        result = await self._session.scalars(stmt.order_by(SimulationRunModel.created_at.desc()))
+        return list(result)
 
     async def count_terminal(self, run_id: uuid.UUID) -> int:
         completed = await self._session.scalar(

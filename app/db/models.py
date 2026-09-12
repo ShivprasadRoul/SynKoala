@@ -265,6 +265,16 @@ class SimulationRunModel(BaseModel):
         UUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid()
     )
     study_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("studies.id"))
+    # Not in the original LLD §3 table — added for the Analytics Engine
+    # (planning/09-analytics-engine.md): excess_actions/excess_screens and
+    # click/discoverability metrics need the *task* a run was for (expected_critical_
+    # actions, starting_point), and nothing else on this row identified it before this.
+    # Nullable because a study can have exactly one task today (the common case
+    # `SimulationUseCase._resolve_task` falls back to), so older rows without it aren't
+    # invalid, just unable to compute task-dependent metrics (skipped, not fabricated).
+    task_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tasks.id"), nullable=True
+    )
     population_size: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(String, nullable=False, server_default="PENDING")
     # 'SYNTHETIC' | 'HUMAN' — planning/13-journey-capture.md. A human run reuses this
@@ -365,6 +375,11 @@ class MetricModel(BaseModel):
     level: Mapped[str] = mapped_column(String, nullable=False)
     metric: Mapped[str] = mapped_column(String, nullable=False)
     element_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    # Not in the original LLD §3 table — `dead_end_rate` (planning/09, LLD §14) is
+    # per-*screen*, not per-element, and this table had no screen dimension at all.
+    screen_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("screens.id"), nullable=True
+    )
     segment: Mapped[str | None] = mapped_column(String, nullable=True)
     value: Mapped[float | None] = mapped_column(Float, nullable=True)
     sample_size: Mapped[int | None] = mapped_column(Integer, nullable=True)

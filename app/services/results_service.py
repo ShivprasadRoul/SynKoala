@@ -9,6 +9,7 @@ from app.db.models import (
     MetricModel,
     ObservationModel,
     ParticipantRunModel,
+    PatternModel,
     SegmentResultModel,
     ValidationResultModel,
 )
@@ -16,11 +17,12 @@ from app.db.models import (
 
 class ResultsService:
     """Owns read-only queries over observations/metrics/segments/validation/
-    insights, keyed only by `run_id` — no ownership check (that's StudyService +
-    SimulationRunService, composed in app/usecases/results.py:ResultsUseCase).
-    Never renders a heatmap or path from a screenshot (HLD §1's key rule) — these
-    are real queries against real tables; they're empty until the Simulation/
-    Analytics/Validation/InsightModel agents (planning/07, 09, 10, 11) actually run."""
+    patterns/insights, keyed only by `run_id` — no ownership check (that's
+    StudyService + SimulationRunService, composed in
+    app/usecases/results.py:ResultsUseCase). Never renders a heatmap or path
+    from a screenshot (HLD §1's key rule) — these are real queries against real
+    tables; they're empty until the Simulation/Analytics/Validation/InsightModel
+    agents (planning/07, 09, 10, 11) actually run."""
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
@@ -43,6 +45,20 @@ class ResultsService:
             .order_by(ObservationModel.participant_run_id, ObservationModel.sequence_no)
             .limit(limit)
             .offset(offset)
+        )
+        return list(result)
+
+    async def list_all_observations(self, run_id: uuid.UUID) -> list[ObservationModel]:
+        """Unpaginated — for the Analytics Engine's aggregation job
+        (planning/09), which needs every observation for the run, not a page of
+        them the way the Results API's `list_observations` does."""
+        result = await self._session.scalars(
+            select(ObservationModel)
+            .join(
+                ParticipantRunModel, ObservationModel.participant_run_id == ParticipantRunModel.id
+            )
+            .where(ParticipantRunModel.simulation_run_id == run_id)
+            .order_by(ObservationModel.participant_run_id, ObservationModel.sequence_no)
         )
         return list(result)
 
@@ -110,6 +126,12 @@ class ResultsService:
     async def list_segment_results(self, run_id: uuid.UUID) -> list[SegmentResultModel]:
         result = await self._session.scalars(
             select(SegmentResultModel).where(SegmentResultModel.simulation_run_id == run_id)
+        )
+        return list(result)
+
+    async def list_patterns(self, run_id: uuid.UUID) -> list[PatternModel]:
+        result = await self._session.scalars(
+            select(PatternModel).where(PatternModel.simulation_run_id == run_id)
         )
         return list(result)
 

@@ -58,9 +58,9 @@ class JourneyCaptureUseCase:
     async def create_human_run(
         self, user: UserModel, study_id: uuid.UUID, task_id: uuid.UUID
     ) -> SimulationRunModel:
-        await self._resolve_task(user, study_id, task_id)
+        task = await self._resolve_task(user, study_id, task_id)
         run = await self._runs.create_run(
-            study_id, population_size=0, config=None, seed=None, source="HUMAN"
+            study_id, population_size=0, config=None, seed=None, task_id=task.id, source="HUMAN"
         )
         await self._session.commit()
         return run

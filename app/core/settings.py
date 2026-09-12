@@ -41,6 +41,11 @@ class Settings(BaseSettings):
     # models) — Pydantic AI reads OPENROUTER_API_KEY itself, not a setting here.
     vision_model: str = "openrouter:openai/gpt-4o-mini"
 
+    # Insight Engine's InsightProvider (planning/11-insight-engine.md) — LLD §29
+    # recommends a frontier-tier model for final insight synthesis specifically,
+    # unlike the mid-tier vision/participant-simulation models above.
+    insight_model: str = "openrouter:openai/gpt-4o"
+
     @cached_property
     def supabase_jwt_issuer(self) -> str:
         return f"{self.supabase_url}/auth/v1"
