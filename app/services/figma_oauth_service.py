@@ -1,5 +1,6 @@
+import base64
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from urllib.parse import urlencode
 
 import httpx
@@ -12,7 +13,19 @@ from app.core.settings import settings
 from app.db.models import FigmaConnectionModel
 
 FIGMA_AUTHORIZE_URL = "https://www.figma.com/oauth"
-FIGMA_TOKEN_URL = "https://www.figma.com/api/oauth/token"
+# https://developers.figma.com/docs/rest-api/oauth-apps/ — both the token exchange
+# and refresh endpoints require HTTP Basic auth with (client_id, client_secret),
+# not those as body params (an earlier version of this file sent them as body
+# params against the older www.figma.com/api/oauth/token host; verified current
+# against Figma's own docs while building the Stimulus Engine's Figma import).
+FIGMA_TOKEN_URL = "https://api.figma.com/v1/oauth/token"
+FIGMA_REFRESH_URL = "https://api.figma.com/v1/oauth/refresh"
+# The one scope the Stimulus Engine's Figma import needs (planning/05):
+# GET /v1/files/:key and GET /v1/images/:key both read under file_content:read.
+FIGMA_OAUTH_SCOPE = "file_content:read"
+# Refresh this far ahead of actual expiry, not exactly at it — a long-running
+# import job shouldn't have its token expire mid-request.
+TOKEN_REFRESH_BUFFER = timedelta(minutes=5)
 
 
 class FigmaOAuthService:
@@ -55,19 +68,23 @@ class FigmaOAuthService:
         params = {
             "client_id": settings.figma_client_id,
             "redirect_uri": settings.figma_redirect_uri,
-            "scope": "file_read",
+            "scope": FIGMA_OAUTH_SCOPE,
             "state": self.encode_state(user_id),
             "response_type": "code",
         }
         return f"{FIGMA_AUTHORIZE_URL}?{urlencode(params)}"
 
+    def _basic_auth_header(self) -> dict[str, str]:
+        credentials = f"{settings.figma_client_id}:{settings.figma_client_secret}"
+        encoded = base64.b64encode(credentials.encode()).decode()
+        return {"Authorization": f"Basic {encoded}"}
+
     async def exchange_code(self, code: str) -> dict:
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 FIGMA_TOKEN_URL,
+                headers=self._basic_auth_header(),
                 data={
-                    "client_id": settings.figma_client_id,
-                    "client_secret": settings.figma_client_secret,
                     "redirect_uri": settings.figma_redirect_uri,
                     "code": code,
                     "grant_type": "authorization_code",
@@ -78,6 +95,47 @@ class FigmaOAuthService:
                 status_code=status.HTTP_502_BAD_GATEWAY, detail="Figma token exchange failed"
             )
         return response.json()
+
+    async def refresh_access_token(self, connection: FigmaConnectionModel) -> FigmaConnectionModel:
+        """The refresh response only carries a new `access_token`/`expires_in`
+        (per Figma's docs) — the original `refresh_token` stays valid and is
+        reused, not replaced."""
+        refresh_token = crypto.decrypt(connection.refresh_token_encrypted)
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                FIGMA_REFRESH_URL,
+                headers=self._basic_auth_header(),
+                data={"refresh_token": refresh_token},
+            )
+        if response.status_code != 200:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY, detail="Figma token refresh failed"
+            )
+        payload = response.json()
+        connection.access_token_encrypted = crypto.encrypt(payload["access_token"])
+        connection.expires_at = datetime.now(UTC) + timedelta(seconds=payload["expires_in"])
+        await self._session.flush()
+        await self._session.refresh(connection)
+        return connection
+
+    async def get_connection(self, user_id: uuid.UUID) -> FigmaConnectionModel | None:
+        return await self._session.scalar(
+            select(FigmaConnectionModel).where(FigmaConnectionModel.user_id == user_id)
+        )
+
+    async def get_valid_access_token(self, user_id: uuid.UUID) -> str:
+        """Used by the Figma-import job (planning/05-stimulus-engine.md), which
+        has no HTTP request/session cookie to fall back on — this is the only
+        way it can get a usable token for that user's Figma account."""
+        connection = await self.get_connection(user_id)
+        if connection is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="This account hasn't connected Figma yet",
+            )
+        if datetime.now(UTC) + TOKEN_REFRESH_BUFFER >= connection.expires_at:
+            connection = await self.refresh_access_token(connection)
+        return crypto.decrypt(connection.access_token_encrypted)
 
     async def save_tokens(
         self,
