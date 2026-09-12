@@ -1,8 +1,10 @@
 from fastapi import APIRouter, Depends
+from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.routes import AuthRoutes
 from app.core.auth import get_current_user
+from app.core.settings import settings
 from app.db.models import UserModel
 from app.db.session import get_session
 from app.usecases.auth import FigmaOAuthUseCase
@@ -31,7 +33,13 @@ async def figma_callback(
     code: str,
     state: str,
     session: AsyncSession = Depends(get_session),
-) -> dict:
+) -> RedirectResponse:
+    """Figma redirects the *browser* here directly (not through the frontend)
+    once the researcher approves the connection — this always runs on the
+    backend's own host (`FIGMA_REDIRECT_URI`), which is a different origin
+    than the web app. Redirecting back to `cors_allowed_origins[0]` (the web
+    app's own origin) is what makes the researcher end up somewhere useful
+    instead of staring at this route's bare JSON on the backend's domain."""
     use_case = FigmaOAuthUseCase(session)
     await use_case.handle_callback(code, state)
-    return {"status": "connected"}
+    return RedirectResponse(f"{settings.cors_allowed_origins[0]}/dashboard?figma=connected")
