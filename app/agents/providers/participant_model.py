@@ -94,7 +94,7 @@ def _clip(value: float) -> float:
     return max(0.0, min(1.0, value))
 
 
-def _default_action_for(element: ElementView) -> ActionType:
+def default_action_for(element: ElementView) -> ActionType:
     if element.type == "input":
         return "TYPE"
     if element.type == "select" or element.semantic_role in ("select", "option"):
@@ -254,7 +254,7 @@ class HeuristicParticipantModel:
         for element in context.screen.elements:
             if not element.interactable:
                 continue
-            action = _default_action_for(element)
+            action = default_action_for(element)
             attended = attention_by_element.get(str(element.id))
             attention_score = attended.attention_score if attended else 0.3
             task_relevance = (
@@ -313,7 +313,7 @@ class RandomParticipantModel:
     async def select_action(self, context: SimulationContext) -> ActionDecision:
         candidates = [
             ActionCandidate(
-                action=_default_action_for(element),
+                action=default_action_for(element),
                 target=str(element.id),
                 utility=0.5,
                 confidence=0.5,
@@ -353,7 +353,7 @@ class SaliencyOnlyParticipantModel:
         }
         candidates = [
             ActionCandidate(
-                action=_default_action_for(element),
+                action=default_action_for(element),
                 target=str(element.id),
                 utility=attention_by_element.get(str(element.id), 0.3),
                 confidence=0.5,
@@ -389,7 +389,7 @@ class TaskOnlyParticipantModel:
     async def select_action(self, context: SimulationContext) -> ActionDecision:
         candidates = [
             ActionCandidate(
-                action=_default_action_for(element),
+                action=default_action_for(element),
                 target=str(element.id),
                 utility=_task_relevance(element, context.task),
                 confidence=0.5,

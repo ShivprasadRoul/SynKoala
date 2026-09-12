@@ -2,8 +2,15 @@ import uuid
 
 import pytest
 
-from app.agents.graphs.simulation_graph import run_simulation
+from app.agents.graphs.simulation_graph import (
+    MAX_SCAN_ATTEMPTS,
+    _scan_duration_range_ms,
+    run_simulation,
+)
 from app.agents.providers.participant_model import (
+    ActionDecision,
+    AttentionCandidate,
+    AttentionDecision,
     HeuristicParticipantModel,
     RandomParticipantModel,
     SaliencyOnlyParticipantModel,
@@ -384,3 +391,193 @@ async def test_unrecognized_success_conditions_shape_does_not_block_critical_act
 
     assert result["outcome"] == "COMPLETED"
     assert result["task_progress"] == 1.0
+
+
+# --- Scan-gated attention/action coupling ------------------------------------------
+# A screen with a resolvable "intended element" (task.expected_critical_actions
+# present on that screen) gates action on attention discovering it first — see
+# app/agents/graphs/simulation_graph.py's module docstring and
+# _intended_element_for_screen.
+
+SCAN_SCREEN_ID = uuid.uuid4()
+NEXT_SCREEN_ID = uuid.uuid4()
+INTENDED_ID = uuid.uuid4()
+DISTRACTOR_ID = uuid.uuid4()
+
+
+def _scan_test_screen_graph() -> ScreenGraph:
+    scan_screen = ScreenView(
+        id=SCAN_SCREEN_ID,
+        screen_key="scan_screen",
+        width=390,
+        height=844,
+        elements=[
+            ElementView(
+                id=INTENDED_ID,
+                element_key="intended_button",
+                type="button",
+                text="Continue",
+                bbox=(20, 300, 370, 360),
+                semantic_role="primary_action",
+                interactable=True,
+            ),
+            ElementView(
+                id=DISTRACTOR_ID,
+                element_key="distractor_link",
+                type="link",
+                text="Learn more",
+                bbox=(20, 400, 370, 430),
+                semantic_role="help",
+                interactable=True,
+            ),
+        ],
+    )
+    next_screen = ScreenView(
+        id=NEXT_SCREEN_ID, screen_key="next_screen", width=390, height=844, elements=[]
+    )
+    transitions = [
+        TransitionView(
+            from_screen_id=SCAN_SCREEN_ID,
+            trigger_element_id=INTENDED_ID,
+            action="CLICK",
+            to_screen_id=NEXT_SCREEN_ID,
+        )
+    ]
+    return ScreenGraph(
+        screens={SCAN_SCREEN_ID: scan_screen, NEXT_SCREEN_ID: next_screen}, transitions=transitions
+    )
+
+
+def _scan_task() -> TaskContext:
+    return TaskContext(
+        id=uuid.uuid4(),
+        instruction="Continue",
+        starting_point="scan_screen",
+        success_conditions={"screen_key": "next_screen"},
+        constraints=None,
+        expected_critical_actions=["intended_button"],
+    )
+
+
+class _FixedAttentionModel:
+    """Always attends to exactly one, fixed element_id, regardless of screen
+    or persona — makes the scan-gating tests below fully deterministic
+    instead of relying on softmax probabilities ever landing (or never
+    landing) on a target."""
+
+    def __init__(self, always_attends_to: uuid.UUID):
+        self._target = always_attends_to
+
+    async def select_attention(self, context):
+        return AttentionDecision(
+            candidates=[
+                AttentionCandidate(
+                    element_id=str(self._target),
+                    visual_saliency=1.0,
+                    task_relevance=1.0,
+                    persona_relevance=1.0,
+                    state_relevance=1.0,
+                    attention_score=1.0,
+                )
+            ]
+        )
+
+    async def select_action(self, context):
+        return ActionDecision(candidates=[])
+
+
+async def test_exhausting_scan_attempts_without_finding_the_intended_element_is_a_dropoff():
+    screen_graph = _scan_test_screen_graph()
+    task = _scan_task()
+    participant = _participant()
+
+    result = await run_simulation(
+        participant=participant,
+        task=task,
+        screen_graph=screen_graph,
+        starting_screen_id=screen_graph.resolve_starting_screen(task.starting_point),
+        seed=1,
+        participant_model=_FixedAttentionModel(always_attends_to=DISTRACTOR_ID),
+        max_steps=20,
+    )
+
+    assert result["outcome"] == "ABANDONED"
+    assert result["failure_reason"] == "intended_action_not_discovered"
+    assert result["current_screen_id"] == SCAN_SCREEN_ID, "must never have transitioned"
+    assert result["scan_count"] == MAX_SCAN_ATTEMPTS
+    gaze_events = [e for e in result["events"] if e["type"] == "GAZE"]
+    assert len(gaze_events) == MAX_SCAN_ATTEMPTS
+    assert all(e["element_id"] == DISTRACTOR_ID for e in gaze_events)
+
+
+async def test_finding_the_intended_element_on_the_first_scan_acts_on_it_immediately():
+    screen_graph = _scan_test_screen_graph()
+    task = _scan_task()
+    participant = _participant()
+
+    result = await run_simulation(
+        participant=participant,
+        task=task,
+        screen_graph=screen_graph,
+        starting_screen_id=screen_graph.resolve_starting_screen(task.starting_point),
+        seed=1,
+        participant_model=_FixedAttentionModel(always_attends_to=INTENDED_ID),
+        max_steps=20,
+    )
+
+    assert result["outcome"] == "COMPLETED"
+    assert result["current_screen_id"] == NEXT_SCREEN_ID
+    gaze_events = [e for e in result["events"] if e["type"] == "GAZE"]
+    assert gaze_events[0]["payload"]["scan_number"] == 1
+    assert any(e["type"] == "CLICK" and e["element_id"] == INTENDED_ID for e in result["events"])
+
+
+async def test_a_screen_with_no_resolvable_intended_element_is_unaffected_by_scan_gating():
+    """The shoe-task fixture's `confirm` screen has zero elements and no
+    critical-action overlap — scan-gating must never engage there, and the
+    original interpret->select_action flow (already exercised by the older
+    tests above) must be what actually runs."""
+    screen_graph = _shoe_task_screen_graph()
+    task = TaskContext(
+        id=uuid.uuid4(),
+        instruction="Add a running shoe under 5000 to cart",
+        starting_point="confirm",
+        success_conditions=None,
+        constraints=None,
+        expected_critical_actions=["cta"],
+    )
+    participant = _participant()
+
+    result = await run_simulation(
+        participant=participant,
+        task=task,
+        screen_graph=screen_graph,
+        starting_screen_id=screen_graph.resolve_starting_screen(task.starting_point),
+        seed=1,
+        participant_model=HeuristicParticipantModel(),
+        max_steps=10,
+    )
+
+    assert result["outcome"] in ("FAILED", "ABANDONED")
+    assert result["failure_reason"] != "intended_action_not_discovered"
+
+
+def test_scan_duration_is_faster_for_a_confident_familiar_persona():
+    """Regression test: duration_ms on a GAZE event used to be a fixed
+    180-900ms window for every persona, ignoring digital_confidence/
+    product_familiarity entirely."""
+    fast_low, fast_high = _scan_duration_range_ms(
+        {"digital_confidence": 1.0, "product_familiarity": 1.0}
+    )
+    slow_low, slow_high = _scan_duration_range_ms(
+        {"digital_confidence": 0.0, "product_familiarity": 0.0}
+    )
+
+    assert fast_low < slow_low
+    assert fast_high < slow_high
+
+
+def test_scan_duration_defaults_to_the_mid_range_when_traits_are_missing():
+    low, high = _scan_duration_range_ms({})
+    assert 150 <= low <= 400
+    assert 500 <= high <= 1400

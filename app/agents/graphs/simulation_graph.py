@@ -12,6 +12,20 @@ using that RNG, not the model's own randomness — see
 `.claude/skills/backend-feature/SKILL.md` §5 for why that split is required for
 reproducibility.
 
+Attention and action are coupled for any screen with a resolvable "intended
+element" (see `_intended_element_for_screen`): rather than `select_action`
+independently re-scoring and sampling over every interactable element every
+step — which let a participant "look at" one thing and "click" another —
+`attend` itself checks whether the just-sampled gaze target IS that intended
+element, and only then does an action happen at all (`act_on_intended`,
+routed via `_route_after_attend`). A screen with no resolvable intended
+element (most exploratory screens) is entirely unaffected and keeps the
+original interpret->select_action flow. This makes "did the persona notice
+the right thing" and "did they act on it" the same event, not two
+independently-sampled ones, and gives a screen-level drop-off a concrete,
+legible cause: `MAX_SCAN_ATTEMPTS` gaze samples came and went without ever
+landing on the one thing that mattered.
+
 No durable checkpointer is wired up: the job handler runs a participant's graph
 to completion within a single job attempt, so an in-memory checkpointer would
 only protect against a crash *within* that attempt — which the worker's own
@@ -37,10 +51,17 @@ from app.agents.providers.participant_model import (
     ParticipantModel,
     ParticipantState,
     SimulationContext,
+    default_action_for,
 )
 from app.agents.types import ElementView, ParticipantDraft, ScreenGraph, ScreenView, TaskContext
 
 Outcome = Literal["IN_PROGRESS", "COMPLETED", "FAILED", "ABANDONED"]
+
+# How many gaze samples a persona gets, on one screen, to happen to land on
+# that screen's own "intended element" (see _intended_element_for_screen)
+# before the whole run is treated as a drop-off. Deliberately small and
+# legible rather than an elaborate eye-tracking model — see chat.
+MAX_SCAN_ATTEMPTS = 4
 
 
 class SimulationState(TypedDict):
@@ -64,6 +85,12 @@ class SimulationState(TypedDict):
     step: int
     outcome: Outcome
     failure_reason: str | None
+    # Gaze samples taken on the *current* screen since arriving — reset to 0
+    # by execute_action whenever the screen changes. Only meaningful for a
+    # screen with a resolvable intended element; otherwise unused.
+    scan_count: int
+    intended_element_id: uuid.UUID | None
+    found_intended_action: bool
 
 
 @dataclass
@@ -71,6 +98,7 @@ class SimulationDeps:
     participant_model: ParticipantModel
     rng: random.Random
     max_steps: int = 40
+    max_scan_attempts: int = MAX_SCAN_ATTEMPTS
 
 
 def _deps(config: RunnableConfig) -> SimulationDeps:
@@ -105,6 +133,21 @@ def _sample_point_in_bbox(
 ) -> tuple[float, float]:
     x1, y1, x2, y2 = bbox
     return (rng.uniform(x1, x2), rng.uniform(y1, y2))
+
+
+def _scan_duration_range_ms(traits: dict[str, float]) -> tuple[int, int]:
+    """How long one gaze/scan takes is persona-dependent, not a fixed
+    180-900ms window for everyone — a confident, familiar-with-the-product
+    persona recognizes and evaluates what they're looking at faster than one
+    who isn't. `speed` of 1.0 (max digital_confidence + product_familiarity)
+    scans in ~150-500ms; 0.0 (min of both) takes ~400-1400ms; the two traits
+    are averaged since either alone plausibly speeds up recognition."""
+    digital_confidence = traits.get("digital_confidence", 0.5)
+    product_familiarity = traits.get("product_familiarity", 0.5)
+    speed = max(0.0, min(1.0, (digital_confidence + product_familiarity) / 2))
+    low = int(150 + (1 - speed) * 250)
+    high = int(500 + (1 - speed) * 900)
+    return low, high
 
 
 def _softmax_sample(items: list, scores: list[float], rng: random.Random, temperature: float = 4.0):
@@ -203,6 +246,28 @@ def _success_condition_met(
     return False
 
 
+def _intended_element_for_screen(
+    screen: ScreenView, critical_actions: set[str]
+) -> ElementView | None:
+    """Resolves `task.expected_critical_actions` (a flat, whole-task-scoped set
+    of element_key/semantic_role strings) down to *this* screen's own element,
+    if any of them appears here — `attend`'s scan-gating below needs a single
+    concrete target to check gaze against, not a task-wide set.
+    `tasks.intended_path` (planning/13-journey-capture.md) would be the more
+    precise, correctly-ordered per-screen source, but it's keyed by Figma node
+    ids with no resolution into this app's screens/elements built yet (that
+    module explicitly defers it, and nothing has ever captured one) — this is
+    the only real, populated source available right now. A screen with no
+    critical-action element on it (most transitional/info screens) returns
+    `None`, and is entirely unaffected by scan-gating below."""
+    if not critical_actions:
+        return None
+    for element in screen.elements:
+        if {element.element_key, element.semantic_role or ""} & critical_actions:
+            return element
+    return None
+
+
 async def orient(state: SimulationState, config: RunnableConfig) -> dict:
     sequence_no = state["sequence_no"]
     event = _make_event(sequence_no, type_="SCREEN_ENTER", screen_id=state["current_screen_id"])
@@ -224,6 +289,13 @@ def _route_after_perceive(state: SimulationState) -> str:
 
 
 async def attend(state: SimulationState, config: RunnableConfig) -> dict:
+    """Samples one gaze target, same as always — but also resolves this
+    screen's own "intended element" (if any) and checks whether *this* gaze
+    happened to land on it. `_route_after_attend` reads `intended_element_id`/
+    `found_intended_action`/`scan_count` to decide what happens next: act on
+    it, take another scan, give up, or (no intended element on this screen at
+    all) fall through to the original interpret->select_action flow
+    untouched."""
     deps = _deps(config)
     screen = state["screen_graph"].screens[state["current_screen_id"]]
     context = _build_context(state, screen)
@@ -237,6 +309,11 @@ async def attend(state: SimulationState, config: RunnableConfig) -> dict:
     sequence_no = state["sequence_no"]
     attention_target = state["attention_target"]
 
+    critical = set(state["task"].expected_critical_actions or [])
+    intended = _intended_element_for_screen(screen, critical)
+    scan_count = state["scan_count"] + 1 if intended is not None else state["scan_count"]
+    found_intended_action = False
+
     if sampled is not None:
         element_id = uuid.UUID(sampled.element_id)
         element = screen.element(element_id)
@@ -245,6 +322,7 @@ async def attend(state: SimulationState, config: RunnableConfig) -> dict:
         x, y = (
             _sample_point_in_bbox(element.bbox, deps.rng) if element is not None else (None, None)
         )
+        duration_low, duration_high = _scan_duration_range_ms(state["participant"].traits)
         events.append(
             _make_event(
                 sequence_no,
@@ -253,16 +331,69 @@ async def attend(state: SimulationState, config: RunnableConfig) -> dict:
                 element_id=element_id,
                 x=x,
                 y=y,
-                duration_ms=int(deps.rng.uniform(180, 900)),
-                payload={"attention_score": sampled.attention_score},
+                duration_ms=int(deps.rng.uniform(duration_low, duration_high)),
+                payload={"attention_score": sampled.attention_score, "scan_number": scan_count},
             )
         )
         sequence_no += 1
+        found_intended_action = intended is not None and element_id == intended.id
 
     return {
         "attention": decision,
         "attention_target": attention_target,
         "element_visit_counts": visit_counts,
+        "events": events,
+        "sequence_no": sequence_no,
+        "scan_count": scan_count,
+        "intended_element_id": intended.id if intended is not None else None,
+        "found_intended_action": found_intended_action,
+    }
+
+
+def _route_after_attend(state: SimulationState, config: RunnableConfig) -> str:
+    if state["intended_element_id"] is None:
+        return "no_intended_element"
+    if state["found_intended_action"]:
+        return "found"
+    max_scan_attempts = _deps(config).max_scan_attempts
+    return "exhausted" if state["scan_count"] >= max_scan_attempts else "rescan"
+
+
+async def act_on_intended(state: SimulationState, config: RunnableConfig) -> dict:
+    """The scan found the screen's intended element — construct its action
+    deterministically (element type/role decides CLICK vs TYPE vs SELECT, the
+    same mapping `HeuristicParticipantModel` uses for its own default action)
+    rather than re-running `select_action`'s independent utility sampling:
+    discovering the intended element via attention IS the decision to act on
+    it here, not a separate roll."""
+    screen = state["screen_graph"].screens[state["current_screen_id"]]
+    element = screen.element(state["intended_element_id"])
+    action = ActionCandidate(
+        action=default_action_for(element), target=str(element.id), utility=1.0, confidence=1.0
+    )
+    return {"action": action}
+
+
+async def scan_exhausted(state: SimulationState, config: RunnableConfig) -> dict:
+    """`MAX_SCAN_ATTEMPTS` gaze samples on this screen never landed on its
+    intended element — a drop-off, per the same reasoning `check_task` uses
+    for every other terminal outcome: ends the whole run, not just this
+    screen, since the persona never discovered what the task actually needed
+    them to find."""
+    events = list(state["events"])
+    sequence_no = state["sequence_no"]
+    events.append(
+        _make_event(
+            sequence_no,
+            type_="ABANDON",
+            screen_id=state["current_screen_id"],
+            payload={"reason": "intended_action_not_discovered", "scans": state["scan_count"]},
+        )
+    )
+    sequence_no += 1
+    return {
+        "outcome": "ABANDONED",
+        "failure_reason": "intended_action_not_discovered",
         "events": events,
         "sequence_no": sequence_no,
     }
@@ -364,6 +495,9 @@ async def execute_action(state: SimulationState, config: RunnableConfig) -> dict
         "backtrack_count": backtrack_count,
         "sequence_no": sequence_no,
         "step": state["step"] + 1,
+        # A new screen gets its own fresh MAX_SCAN_ATTEMPTS budget — scan_count
+        # is scoped to "attempts on the current screen", not the whole run.
+        "scan_count": 0 if new_screen_id != current_screen_id else state["scan_count"],
     }
 
 
@@ -480,6 +614,8 @@ def _build_graph():
     graph.add_node("orient", orient)
     graph.add_node("perceive", perceive)
     graph.add_node("attend", attend)
+    graph.add_node("act_on_intended", act_on_intended)
+    graph.add_node("scan_exhausted", scan_exhausted)
     graph.add_node("interpret", interpret)
     graph.add_node("select_action", select_action)
     graph.add_node("execute_action", execute_action)
@@ -491,7 +627,22 @@ def _build_graph():
     graph.add_conditional_edges(
         "perceive", _route_after_perceive, {"continue": "attend", "terminal": END}
     )
-    graph.add_edge("attend", "interpret")
+    # A screen with a resolvable intended element (see _intended_element_for_
+    # screen) is gated on attention finding it; a screen with none falls
+    # straight through to the original, unconstrained interpret->select_action
+    # flow, unchanged.
+    graph.add_conditional_edges(
+        "attend",
+        _route_after_attend,
+        {
+            "no_intended_element": "interpret",
+            "found": "act_on_intended",
+            "rescan": "attend",
+            "exhausted": "scan_exhausted",
+        },
+    )
+    graph.add_edge("act_on_intended", "execute_action")
+    graph.add_edge("scan_exhausted", END)
     graph.add_edge("interpret", "select_action")
     graph.add_edge("select_action", "execute_action")
     graph.add_edge("execute_action", "update_state")
@@ -514,9 +665,13 @@ async def run_simulation(
     seed: int | str | None,
     participant_model: ParticipantModel,
     max_steps: int = 40,
+    max_scan_attempts: int = MAX_SCAN_ATTEMPTS,
 ) -> SimulationState:
     deps = SimulationDeps(
-        participant_model=participant_model, rng=random.Random(seed), max_steps=max_steps
+        participant_model=participant_model,
+        rng=random.Random(seed),
+        max_steps=max_steps,
+        max_scan_attempts=max_scan_attempts,
     )
     initial_state: SimulationState = {
         "participant": participant,
@@ -539,6 +694,15 @@ async def run_simulation(
         "step": 0,
         "outcome": "IN_PROGRESS",
         "failure_reason": None,
+        "scan_count": 0,
+        "intended_element_id": None,
+        "found_intended_action": False,
     }
-    config = {"configurable": {"deps": deps}, "recursion_limit": max_steps * 8 + 20}
+    # Extra headroom beyond the old max_steps*8 estimate: each screen visit
+    # can now also take up to max_scan_attempts "rescan" loops through attend
+    # before finding its intended element or giving up.
+    config = {
+        "configurable": {"deps": deps},
+        "recursion_limit": max_steps * (8 + max_scan_attempts) + 20,
+    }
     return await _COMPILED_GRAPH.ainvoke(initial_state, config=config)
