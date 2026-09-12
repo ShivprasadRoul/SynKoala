@@ -20,19 +20,25 @@ leads to screen B'") needed a concrete shape, which didn't exist anywhere yet. N
 in `05-stimulus-engine.md` as a planning decision made here.
 """
 
-from typing import Literal, Protocol, runtime_checkable
+from typing import Annotated, Literal, Protocol, runtime_checkable
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from pydantic_ai import Agent, BinaryContent
 
 from app.core.settings import settings
+
+# Pydantic's JSON schema for a fixed-length tuple (`tuple[int, int, int, int]`) uses
+# `prefixItems` with no `items` key — several providers' strict structured-output
+# validators (e.g. OpenAI's function-calling schema check) reject that shape. A
+# length-constrained plain array avoids it while still round-tripping as [x1, y1, x2, y2].
+BBox = Annotated[list[int], Field(min_length=4, max_length=4)]
 
 
 class ScreenElement(BaseModel):
     id: str
     type: str
     text: str | None
-    bbox: tuple[int, int, int, int]
+    bbox: BBox
     semantic_role: str
     interactable: bool
 
