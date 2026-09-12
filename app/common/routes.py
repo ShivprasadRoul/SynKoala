@@ -29,7 +29,6 @@ class AudiencesRoutes:
     BASE_PATH = "studies/{study_id}/audience"
     LIST_CREATE = f"/{BASE_PATH}"
     GENERATE = f"/{BASE_PATH}/generate"
-    PERSONAS = f"/{BASE_PATH}/personas"
 
 
 class StimuliRoutes:

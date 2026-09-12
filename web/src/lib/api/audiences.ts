@@ -1,5 +1,5 @@
 import { ApiError, apiFetch } from "../apiClient";
-import type { Audience, Participant, Persona } from "../types";
+import type { Audience, Participant } from "../types";
 
 // GET .../audience returns the single latest AudienceRead, not a list — a study
 // has at most one "current" audience definition (app/api/v1/audiences.py).
@@ -14,13 +14,6 @@ export async function getAudience(studyId: string): Promise<Audience | null> {
 
 export function createAudience(studyId: string, input: { name: string; definition: object }) {
   return apiFetch<Audience>(`/studies/${studyId}/audience`, { body: input });
-}
-
-// Appends one persona to the current audience's definition.personas and returns the
-// updated Audience (app/api/v1/audiences.py:add_persona) — there's no separate
-// Persona resource/id, so nothing to return but the whole parent.
-export function addPersona(studyId: string, persona: Persona) {
-  return apiFetch<Audience>(`/studies/${studyId}/audience/personas`, { body: persona });
 }
 
 // Adds to the population — it doesn't replace it, and there's no endpoint to list

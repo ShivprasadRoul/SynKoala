@@ -18,15 +18,18 @@ export interface Study {
 
 // Bands AudienceEngine understands for digital/behaviour traits
 // (app/services/audience_engine.py:_BAND_TO_MEAN_STD) — a researcher picks one of
-// these per trait rather than typing a raw mean/std.
-export const TRAIT_BANDS = ["low", "low_medium", "medium", "medium_high", "high"] as const;
+// these per trait rather than typing a raw mean/std. The UI only offers the three
+// coarse bands (low/medium/high) per the audience-module spec; the backend also
+// accepts low_medium/medium_high for finer-grained callers.
+export const TRAIT_BANDS = ["low", "medium", "high"] as const;
 export type TraitBand = (typeof TRAIT_BANDS)[number];
 
 // The specific shape this app writes into Audience.definition (backend-typed as a
 // bare `dict` — app/domain/schemas/audience.py — since AudienceEngine.build_prior
-// only reads a few known keys and passes the rest through). `personas` is this app's
-// own addition: hand-authored, qualitative target personas, kept alongside the
-// statistical prior but never read by AudienceEngine's sampling.
+// only reads a few known keys and passes the rest through). Audience != Persona:
+// this is only the statistical population definition — no persona-level fields
+// (name, occupation, motivations, etc.) belong here. Personas are sampled from
+// this definition via "Generate Personas", not hand-authored alongside it.
 export interface AudienceDefinition {
   demographics?: {
     country?: string;
@@ -44,39 +47,6 @@ export interface AudienceDefinition {
     goal_directedness?: TraitBand;
   };
   description?: string;
-  personas?: Persona[];
-}
-
-// Mirrors app/domain/schemas/audience.py:PersonaCreate exactly — field set matches
-// the persona-authoring form this product's team already uses elsewhere.
-export interface Persona {
-  persona_name: string;
-  subtitle: string;
-  persona_description?: string;
-  age_group: string;
-  country: string;
-  language: string;
-  occupation?: string;
-  product_usage?: string;
-  brand_affinity?: string;
-  lifestyle_behaviour?: string;
-  risk_tolerance?: string;
-  price_sensitivity?: string;
-  novelty_presence?: string;
-  emotional_state?: string;
-  income_band?: string;
-  generation?: string;
-  urbanicity?: string;
-  purchase_occasion?: string;
-  primary_device?: string;
-  decision_stage?: string;
-  job_to_be_done?: string;
-  domain?: Record<string, string>;
-  motivations?: string[];
-  pain_points?: string[];
-  key_decision_trigger?: string[];
-  preferred_channels?: string[];
-  decision_criteria?: Record<string, string>;
 }
 
 export interface Audience {

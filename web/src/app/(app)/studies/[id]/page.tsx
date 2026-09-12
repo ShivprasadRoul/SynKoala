@@ -5,12 +5,14 @@ import { useParams } from "next/navigation";
 
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
+import { getAudience } from "@/lib/api/audiences";
 import { getStudy, updateStudy } from "@/lib/api/studies";
 
 export default function StudyOverviewPage() {
   const { id } = useParams<{ id: string }>();
   const queryClient = useQueryClient();
   const { data: study } = useQuery({ queryKey: ["study", id], queryFn: () => getStudy(id) });
+  const { data: audience } = useQuery({ queryKey: ["audience", id], queryFn: () => getAudience(id) });
 
   const markReady = useMutation({
     mutationFn: () => updateStudy(id, { status: "READY" }),
@@ -18,6 +20,8 @@ export default function StudyOverviewPage() {
   });
 
   if (!study) return null;
+
+  const canPublish = Boolean(audience);
 
   return (
     <div className="flex flex-col gap-6">
@@ -28,14 +32,21 @@ export default function StudyOverviewPage() {
           study is READY — set up an audience, task, and stimulus first.
         </p>
         {study.status === "DRAFT" && (
-          <Button
-            variant="secondary"
-            className="mt-4"
-            disabled={markReady.isPending}
-            onClick={() => markReady.mutate()}
-          >
-            {markReady.isPending ? "Marking ready…" : "Mark study READY"}
-          </Button>
+          <>
+            <Button
+              variant="secondary"
+              className="mt-4"
+              disabled={markReady.isPending || !canPublish}
+              onClick={() => markReady.mutate()}
+            >
+              {markReady.isPending ? "Marking ready…" : "Mark study READY"}
+            </Button>
+            {!canPublish && (
+              <p className="mt-2 text-[13px] text-ink-muted">
+                Add an audience segment before publishing this study.
+              </p>
+            )}
+          </>
         )}
         {markReady.isError && (
           <p className="mt-3 text-[13px] text-semantic-warn">

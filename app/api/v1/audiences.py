@@ -12,7 +12,6 @@ from app.domain.schemas.audience import (
     AudienceRead,
     GenerateAudienceRequest,
     ParticipantRead,
-    PersonaCreate,
 )
 from app.usecases.audiences import AudienceUseCase
 
@@ -41,20 +40,6 @@ async def get_audience(
 ) -> AudienceRead:
     use_case = AudienceUseCase(session)
     audience = await use_case.get(current_user, study_id)
-    return AudienceRead.model_validate(audience)
-
-
-@audiences_router_v1.post(AudiencesRoutes.PERSONAS, response_model=AudienceRead)
-async def add_persona(
-    study_id: uuid.UUID,
-    body: PersonaCreate,
-    current_user: UserModel = Depends(get_current_user),
-    session: AsyncSession = Depends(get_session),
-) -> AudienceRead:
-    use_case = AudienceUseCase(session)
-    audience = await use_case.add_persona(
-        current_user, study_id, body.model_dump(exclude_none=True)
-    )
     return AudienceRead.model_validate(audience)
 
 

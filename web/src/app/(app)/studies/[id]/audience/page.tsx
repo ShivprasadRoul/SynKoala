@@ -4,22 +4,18 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams } from "next/navigation";
 import { useState } from "react";
 
-import { PersonaCard } from "@/components/audience/PersonaCard";
-import { PersonaForm } from "@/components/audience/PersonaForm";
 import { Button } from "@/components/ui/Button";
 import { Card, CardTitle } from "@/components/ui/Card";
 import { Input, Label, Textarea } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
-import { addPersona, createAudience, generatePopulation, getAudience } from "@/lib/api/audiences";
+import { createAudience, generatePopulation, getAudience } from "@/lib/api/audiences";
 import { getStudy } from "@/lib/api/studies";
-import type { AudienceDefinition, Persona, TraitBand } from "@/lib/types";
+import type { AudienceDefinition, TraitBand } from "@/lib/types";
 import { TRAIT_BANDS } from "@/lib/types";
 
 const TRAIT_BAND_LABELS: Record<TraitBand, string> = {
   low: "Low",
-  low_medium: "Low-medium",
   medium: "Medium",
-  medium_high: "Medium-high",
   high: "High",
 };
 
@@ -56,13 +52,15 @@ export default function AudiencePage() {
     queryFn: () => getAudience(studyId),
   });
 
-  // --- Step 1: define the audience group (country/age/city/trait distribution) ---
+  // --- Define the audience: a statistical population definition, not a persona.
+  // Only country/language are required; region/city and age range are optional
+  // per the audience-module spec — a researcher may not know either yet. ---
   const [name, setName] = useState("");
-  const [country, setCountry] = useState("India");
-  const [language, setLanguage] = useState("English");
+  const [country, setCountry] = useState("");
+  const [language, setLanguage] = useState("");
   const [city, setCity] = useState("");
-  const [ageMin, setAgeMin] = useState(25);
-  const [ageMax, setAgeMax] = useState(35);
+  const [ageMin, setAgeMin] = useState("");
+  const [ageMax, setAgeMax] = useState("");
   const [confidence, setConfidence] = useState<TraitBand>("medium");
   const [familiarity, setFamiliarity] = useState<TraitBand>("medium");
   const [exploration, setExploration] = useState<TraitBand>("medium");
@@ -72,37 +70,30 @@ export default function AudiencePage() {
 
   const createMutation = useMutation({
     mutationFn: () => {
+      const min = ageMin.trim() ? Number(ageMin) : undefined;
+      const max = ageMax.trim() ? Number(ageMax) : undefined;
       const definition: AudienceDefinition = {
         demographics: {
           country,
           language,
-          city: city || undefined,
-          age_range: [ageMin, ageMax],
+          city: city.trim() || undefined,
+          age_range: min !== undefined && max !== undefined ? [min, max] : undefined,
         },
         digital: { confidence, familiarity },
         behaviour: { exploration, patience, goal_directedness: goalDirectedness },
-        description: description || undefined,
-        personas: [],
+        description: description.trim() || undefined,
       };
       return createAudience(studyId, { name, definition });
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["audience", studyId] }),
   });
 
-  // --- Step 2: add one or more target personas within that audience ---
-  const [showPersonaForm, setShowPersonaForm] = useState(false);
-  const addPersonaMutation = useMutation({
-    mutationFn: (persona: Persona) => addPersona(studyId, persona),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["audience", studyId] });
-      setShowPersonaForm(false);
-    },
-  });
-
-  // --- Step 3: sample a synthetic population from the audience's distribution ---
-  // Defaults to the study's own sample size (set at creation) rather than a
-  // hardcoded number — the same default the mobile app uses when it
-  // auto-starts a run after a defined-path walkthrough.
+  // --- Generate personas: samples individual participants from the audience's
+  // statistical prior (AudienceEngine.sample_participants) — the audience itself
+  // stays a distribution, never a fixed persona. Defaults to the study's own
+  // sample size (set at creation) rather than a hardcoded number — the same
+  // default the mobile app uses when it auto-starts a run after a defined-path
+  // walkthrough. ---
   const { data: study } = useQuery({ queryKey: ["study", studyId], queryFn: () => getStudy(studyId) });
   const [populationSizeOverride, setPopulationSizeOverride] = useState<number | null>(null);
   const populationSize = populationSizeOverride ?? study?.population_size ?? 50;
@@ -125,10 +116,9 @@ export default function AudiencePage() {
       <Card>
         <CardTitle>Define the audience</CardTitle>
         <p className="mt-2 text-[13px] text-ink-muted">
-          A distribution of traits — country, age, and how confident/exploratory this group
-          tends to be — that the Audience Engine samples individual participants from. This
-          isn&apos;t a fixed persona; it&apos;s the population the personas below are drawn
-          from.
+          A distribution of traits — geography, language, and how confident/exploratory this
+          group tends to be — that the Audience Engine samples individual participants from.
+          This is the population personas are generated from, not a persona itself.
         </p>
         <form
           onSubmit={(e) => {
@@ -138,7 +128,7 @@ export default function AudiencePage() {
           className="mt-4 flex flex-col gap-4"
         >
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="audience-name">Audience group name</Label>
+            <Label htmlFor="audience-name">Audience name</Label>
             <Input
               id="audience-name"
               required
@@ -168,7 +158,7 @@ export default function AudiencePage() {
               />
             </div>
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="audience-city">City (optional)</Label>
+              <Label htmlFor="audience-city">Region / city (optional)</Label>
               <Input
                 id="audience-city"
                 placeholder="Mumbai"
@@ -179,25 +169,27 @@ export default function AudiencePage() {
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="audience-age-min">Age range</Label>
+            <Label htmlFor="audience-age-min">Age range (optional)</Label>
             <div className="flex items-center gap-3">
               <Input
                 id="audience-age-min"
                 type="number"
                 min={13}
                 max={99}
+                placeholder="Min"
                 className="w-24"
                 value={ageMin}
-                onChange={(e) => setAgeMin(Number(e.target.value))}
+                onChange={(e) => setAgeMin(e.target.value)}
               />
               <span className="text-[13px] text-ink-tertiary">to</span>
               <Input
                 type="number"
                 min={13}
                 max={99}
+                placeholder="Max"
                 className="w-24"
                 value={ageMax}
-                onChange={(e) => setAgeMax(Number(e.target.value))}
+                onChange={(e) => setAgeMax(e.target.value)}
               />
             </div>
           </div>
@@ -240,6 +232,7 @@ export default function AudiencePage() {
             <Textarea
               id="audience-description"
               rows={2}
+              placeholder="Free-form notes for context — not used as a sampling input."
               value={description}
               onChange={(e) => setDescription(e.target.value)}
             />
@@ -261,7 +254,6 @@ export default function AudiencePage() {
   }
 
   const definition = audience.definition as AudienceDefinition;
-  const personas = definition.personas ?? [];
 
   return (
     <div className="flex flex-col gap-6">
@@ -289,51 +281,11 @@ export default function AudiencePage() {
       </Card>
 
       <Card>
-        <div className="flex items-center justify-between">
-          <CardTitle>Target personas</CardTitle>
-          {!showPersonaForm && (
-            <Button variant="secondary" onClick={() => setShowPersonaForm(true)}>
-              + Add persona
-            </Button>
-          )}
-        </div>
+        <CardTitle>Generate personas</CardTitle>
         <p className="mt-2 text-[13px] text-ink-muted">
-          Qualitative profiles the synthetic population should represent — descriptive colour
-          for the study, not the statistical distribution itself.
-        </p>
-
-        {personas.length > 0 && (
-          <div className="mt-4 flex flex-col gap-3">
-            {personas.map((persona, index) => (
-              <PersonaCard key={`${persona.persona_name}-${index}`} persona={persona} />
-            ))}
-          </div>
-        )}
-
-        {showPersonaForm && (
-          <div className="mt-4 border-t border-hairline pt-4">
-            <PersonaForm
-              defaultCountry={definition.demographics?.country}
-              defaultLanguage={definition.demographics?.language}
-              onSubmit={(persona) => addPersonaMutation.mutate(persona)}
-              isPending={addPersonaMutation.isPending}
-              error={
-                addPersonaMutation.isError
-                  ? addPersonaMutation.error instanceof Error
-                    ? addPersonaMutation.error.message
-                    : "Failed to add persona"
-                  : null
-              }
-            />
-          </div>
-        )}
-      </Card>
-
-      <Card>
-        <CardTitle>Generate population</CardTitle>
-        <p className="mt-2 text-[13px] text-ink-muted">
-          Samples participants from the audience&apos;s distribution. Repeatable — each call
-          adds more participants, it doesn&apos;t replace the existing population.
+          Samples individual synthetic participants from the audience&apos;s distribution.
+          Repeatable — each call adds more participants, it doesn&apos;t replace the existing
+          population.
         </p>
         <form
           onSubmit={(e) => {
@@ -364,20 +316,20 @@ export default function AudiencePage() {
               onChange={(e) => setSeed(e.target.value)}
             />
           </div>
-          <Button type="submit" variant="secondary" disabled={generateMutation.isPending}>
-            {generateMutation.isPending ? "Generating…" : "Generate"}
+          <Button type="submit" disabled={generateMutation.isPending}>
+            {generateMutation.isPending ? "Generating…" : "Generate Personas"}
           </Button>
         </form>
         {generateMutation.isError && (
           <p className="mt-3 text-[13px] text-semantic-warn">
             {generateMutation.error instanceof Error
               ? generateMutation.error.message
-              : "Failed to generate population"}
+              : "Failed to generate personas"}
           </p>
         )}
         {lastGeneratedCount !== null && (
           <p className="mt-3 font-mono text-[13px] tabular-nums text-ink">
-            +{lastGeneratedCount} participants generated this session
+            +{lastGeneratedCount} personas generated this session
           </p>
         )}
       </Card>

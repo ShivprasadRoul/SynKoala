@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef } from "react";
-import { Animated, StyleSheet, Text, View } from "react-native";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Animated, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { WebView, type WebViewMessageEvent } from "react-native-webview";
 
 import type { CapturedAction } from "../types";
@@ -24,24 +24,31 @@ function buildEmbedHtml(figmaUrl: string): string {
     <iframe id="figma-embed" src="${embedSrc}" allowfullscreen></iframe>
     <script>
       window.addEventListener('message', function (event) {
-        if (event.data && typeof event.data === 'object' && event.data.type) {
-          window.ReactNativeWebView.postMessage(JSON.stringify(event.data));
-        }
+        // Forward EVERY message, not just the ones we recognize — the RN
+        // side logs the raw payload so we can see exactly what Figma's
+        // embed actually sends (its real event shape is unverified against
+        // a live prototype, see the component doc comment below).
+        window.ReactNativeWebView.postMessage(JSON.stringify({
+          origin: event.origin,
+          data: event.data,
+        }));
       });
     </script>
   </body></html>`;
 }
 
 /**
- * Embeds Figma's prototype player (Embed Kit 2.0) and turns its postMessage
- * events into captured steps automatically — no manual tap/scroll/back
- * buttons. Figma's embed only reports PRESENTED_NODE_CHANGED (which screen is
- * now showing), not how the tester got there, so every automatically detected
- * step is logged as a generic navigation ("TAP") — there's no API-level way to
- * tell tap/scroll/swipe-back apart from inside the embed. If it turns out
- * PRESENTED_NODE_CHANGED doesn't fire reliably for some prototype, this is the
- * one place to revisit (planning/13-journey-capture.md's "verify against a
- * real prototype" spike).
+ * Embeds Figma's prototype player (Embed Kit 2.0). Two capture mechanisms run
+ * side by side right now:
+ *
+ * 1. Automatic — every postMessage from the embed is logged (visible via
+ *    `adb logcat | grep ReactNativeJS` while testing) and scanned for a
+ *    node-id-shaped field. This is unverified against a real prototype:
+ *    Figma's actual event name/payload shape may not match what's assumed
+ *    here, which is exactly why steps weren't recording automatically.
+ * 2. Manual fallback — Log Tap/Scroll/Back buttons + a node-id field, kept
+ *    so a capture session is never fully blocked while the automatic side
+ *    gets diagnosed against real usage.
  *
  * A Figma file gated behind "must be logged in to view" will show Figma's own
  * login screen here — there's no way to bypass that with a cached API token
@@ -53,6 +60,7 @@ function buildEmbedHtml(figmaUrl: string): string {
 export function FigmaCaptureView({ figmaUrl, onStep }: Props) {
   const html = useMemo(() => buildEmbedHtml(figmaUrl), [figmaUrl]);
   const lastStepAt = useRef(Date.now());
+  const [pendingNodeId, setPendingNodeId] = useState("");
 
   // A pulsing red border + badge around the prototype view — the visible
   // signal that a capture session is actively recording, for as long as this
@@ -70,21 +78,52 @@ export function FigmaCaptureView({ figmaUrl, onStep }: Props) {
     return () => loop.stop();
   }, [pulse]);
 
-  function logStep(action: CapturedAction, screenFigmaNodeId: string) {
+  function logStep(action: CapturedAction, nodeIdOverride?: string) {
     const now = Date.now();
     const durationMs = now - lastStepAt.current;
     lastStepAt.current = now;
-    onStep({ screenFigmaNodeId, elementFigmaNodeId: null, action, durationMs });
+    onStep({
+      screenFigmaNodeId: nodeIdOverride ?? (pendingNodeId.trim() || "unknown"),
+      elementFigmaNodeId: null,
+      action,
+      durationMs,
+    });
+  }
+
+  // Best-effort scan for anything node-id-shaped in an unrecognized payload,
+  // so a differently-named Figma event still has a chance of being caught
+  // automatically instead of silently doing nothing.
+  function findNodeId(data: unknown): string | null {
+    if (!data || typeof data !== "object") return null;
+    for (const [key, value] of Object.entries(data as Record<string, unknown>)) {
+      if (typeof value === "string" && /node/i.test(key) && /id/i.test(key)) return value;
+      if (value && typeof value === "object") {
+        const nested = findNodeId(value);
+        if (nested) return nested;
+      }
+    }
+    return null;
   }
 
   function handleMessage(event: WebViewMessageEvent) {
+    let parsed: { origin?: string; data?: unknown };
     try {
-      const data = JSON.parse(event.nativeEvent.data);
-      if (data?.type === "PRESENTED_NODE_CHANGED" && data?.data?.presentedNodeId) {
-        logStep("TAP", data.data.presentedNodeId as string);
-      }
+      parsed = JSON.parse(event.nativeEvent.data);
     } catch {
-      // Non-JSON or unrelated postMessage traffic from the embed — ignore.
+      return;
+    }
+    // Visible via `adb logcat | grep ReactNativeJS` — the actual diagnostic
+    // signal while Figma's real embed event shape is unverified.
+    console.log("FigmaCaptureView raw message:", JSON.stringify(parsed));
+
+    const data = parsed?.data as { type?: string; data?: { presentedNodeId?: string } } | undefined;
+    if (data?.type === "PRESENTED_NODE_CHANGED" && data?.data?.presentedNodeId) {
+      logStep("TAP", data.data.presentedNodeId);
+      return;
+    }
+    const fallbackNodeId = findNodeId(parsed?.data);
+    if (fallbackNodeId) {
+      logStep("TAP", fallbackNodeId);
     }
   }
 
@@ -103,6 +142,26 @@ export function FigmaCaptureView({ figmaUrl, onStep }: Props) {
         <Animated.View pointerEvents="none" style={[styles.recordingBorder, { opacity: pulse }]} />
         <View pointerEvents="none" style={styles.recordingBadge}>
           <Text style={styles.recordingBadgeText}>● Capturing</Text>
+        </View>
+      </View>
+      <View style={styles.controls}>
+        <TextInput
+          style={styles.input}
+          placeholder="Figma node id (manual fallback)"
+          value={pendingNodeId}
+          onChangeText={setPendingNodeId}
+          autoCapitalize="none"
+        />
+        <View style={styles.buttonRow}>
+          <TouchableOpacity style={styles.button} onPress={() => logStep("TAP")}>
+            <Text style={styles.buttonText}>Log Tap</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.button} onPress={() => logStep("SCROLL")}>
+            <Text style={styles.buttonText}>Log Scroll</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.button} onPress={() => logStep("BACK")}>
+            <Text style={styles.buttonText}>Log Back</Text>
+          </TouchableOpacity>
         </View>
       </View>
     </View>
@@ -132,4 +191,15 @@ const styles = StyleSheet.create({
     borderRadius: 999,
   },
   recordingBadgeText: { color: "#fff", fontSize: 12, fontWeight: "700" },
+  controls: { padding: 12, borderTopWidth: 1, borderTopColor: "#ddd", gap: 8 },
+  input: { borderWidth: 1, borderColor: "#ccc", borderRadius: 8, padding: 8 },
+  buttonRow: { flexDirection: "row", gap: 8 },
+  button: {
+    flex: 1,
+    backgroundColor: "#1d4ed8",
+    borderRadius: 8,
+    padding: 10,
+    alignItems: "center",
+  },
+  buttonText: { color: "#fff", fontWeight: "600" },
 });
