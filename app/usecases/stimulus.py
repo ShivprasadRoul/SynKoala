@@ -42,16 +42,28 @@ class StimulusUseCase:
         return await self._stimuli.list_for_study(study_id)
 
     async def request_analysis(self, user: UserModel, study_id: uuid.UUID) -> list[JobModel]:
-        """Enqueues one analyze_stimulus job per stimulus belonging to the study —
+        """Enqueues one job per stimulus belonging to the study —
         planning/02-api.md's /stimulus/analyze has no per-stimulus id, it analyzes
-        everything uploaded for the study so far."""
+        everything uploaded for the study so far. A `type == "figma"` stimulus
+        needs the owner's Figma OAuth token, which only exists in this
+        authenticated request's context — not the `figma` job's own payload —
+        so it's the one thing the job type branches on that VisionProvider's
+        `analyze_stimulus` path never needed."""
         await self._studies.get_owned(user, study_id)
-        stimulus_ids = await self._stimuli.list_ids_for_study(study_id)
-        if not stimulus_ids:
+        stimuli = await self._stimuli.list_for_study(study_id)
+        if not stimuli:
             raise NotFoundError(f"No stimulus uploaded for study {study_id}")
-        jobs = [
-            await self._jobs.enqueue("analyze_stimulus", {"stimulus_id": str(sid)})
-            for sid in stimulus_ids
-        ]
+        jobs = []
+        for stimulus in stimuli:
+            if stimulus.type == "figma":
+                job = await self._jobs.enqueue(
+                    "import_figma_prototype",
+                    {"stimulus_id": str(stimulus.id), "user_id": str(user.id)},
+                )
+            else:
+                job = await self._jobs.enqueue(
+                    "analyze_stimulus", {"stimulus_id": str(stimulus.id)}
+                )
+            jobs.append(job)
         await self._session.commit()
         return jobs
