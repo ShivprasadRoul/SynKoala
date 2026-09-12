@@ -39,6 +39,12 @@ class AudienceService:
         )
         return list(result)
 
+    async def get_participant(self, participant_id: uuid.UUID) -> ParticipantRecordModel:
+        participant = await self._session.get(ParticipantRecordModel, participant_id)
+        if participant is None:
+            raise NotFoundError(f"Participant {participant_id} not found")
+        return participant
+
     async def create_participants(
         self, audience_id: uuid.UUID, traits_list: list[dict], seed: int | None
     ) -> list[ParticipantRecordModel]:

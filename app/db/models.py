@@ -148,7 +148,9 @@ class StimulusModel(BaseModel):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     study: Mapped["StudyModel"] = relationship(back_populates="stimuli")
-    screens: Mapped[list["ScreenModel"]] = relationship(back_populates="stimulus")
+    screens: Mapped[list["ScreenModel"]] = relationship(
+        back_populates="stimulus", order_by="ScreenModel.created_at"
+    )
 
 
 class ScreenModel(BaseModel):
@@ -166,7 +168,9 @@ class ScreenModel(BaseModel):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     stimulus: Mapped["StimulusModel"] = relationship(back_populates="screens")
-    elements: Mapped[list["UIElementModel"]] = relationship(back_populates="screen")
+    elements: Mapped[list["UIElementModel"]] = relationship(
+        back_populates="screen", order_by="UIElementModel.created_at"
+    )
 
 
 class UIElementModel(BaseModel):
