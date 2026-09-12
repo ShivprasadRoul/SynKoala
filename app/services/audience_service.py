@@ -33,6 +33,20 @@ class AudienceService:
             raise NotFoundError(f"No audience defined for study {study_id}")
         return audience
 
+    async def add_persona(self, audience: AudienceModel, persona: dict) -> AudienceModel:
+        """Appends a hand-authored target persona to `definition["personas"]` —
+        descriptive/qualitative colour attached to the audience, not itself a
+        trait-sampling input (AudienceEngine never reads this key). Reassigns
+        the whole `definition` dict rather than mutating the existing one
+        in-place: this column has no `Mutable`-tracking configured, so an
+        in-place `.append()` on a nested list wouldn't be detected as a change
+        and would silently fail to persist."""
+        personas = list(audience.definition.get("personas", []))
+        personas.append(persona)
+        audience.definition = {**audience.definition, "personas": personas}
+        await self._session.flush()
+        return audience
+
     async def list_participants(self, audience_id: uuid.UUID) -> list[ParticipantRecordModel]:
         result = await self._session.scalars(
             select(ParticipantRecordModel).where(ParticipantRecordModel.audience_id == audience_id)

@@ -32,6 +32,15 @@ class AudienceUseCase:
         await self._studies.get_owned(user, study_id)
         return await self._audiences.get_latest_for_study(study_id)
 
+    async def add_persona(
+        self, user: UserModel, study_id: uuid.UUID, persona: dict
+    ) -> AudienceModel:
+        await self._studies.get_owned(user, study_id)
+        audience = await self._audiences.get_latest_for_study(study_id)
+        audience = await self._audiences.add_persona(audience, persona)
+        await self._session.commit()
+        return audience
+
     async def generate_population(
         self, user: UserModel, study_id: uuid.UUID, population_size: int, seed: int | None
     ) -> list[ParticipantRecordModel]:
