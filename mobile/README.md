@@ -52,7 +52,10 @@ built APK be pointed at whichever machine is running the backend, without a rebu
 - **Figma embed event shape**: `FigmaCaptureView` assumes Figma's Embed Kit 2.0 emits a
   `PRESENTED_NODE_CHANGED` message with `data.presentedNodeId` on every prototype interaction.
   Confirm this against a real Figma prototype early — if the shape differs, the manual
-  Tap/Scroll/Back buttons (with a manually-entered node id) still work as a fallback.
+  Tap/Scroll/Back buttons (with a manually-entered node id) still work as a fallback. This event
+  only arrives at all once `EXPO_PUBLIC_FIGMA_EMBED_CLIENT_ID` is set and
+  `FIGMA_EMBED_BASE_URL` is registered in that Figma app's Embed API "Allowed embed origins" —
+  see `../docs/figma-setup.md` §5, also unverified against a real device yet.
 - **`expo-audio` API**: `TesterCaptureScreen` uses `useAudioRecorder`/`RecordingPresets`/
   `AudioModule.requestRecordingPermissionsAsync` per the package's documented shape as of this
   writing — recheck against the installed version if recording doesn't work.

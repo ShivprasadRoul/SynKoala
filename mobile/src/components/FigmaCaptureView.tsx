@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Animated, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { WebView, type WebViewMessageEvent } from "react-native-webview";
 
+import { FIGMA_EMBED_CLIENT_ID } from "../config";
 import type { CapturedAction } from "../types";
 
 export interface CapturedStep {
@@ -16,8 +17,19 @@ interface Props {
   onStep: (step: CapturedStep) => void;
 }
 
+// Must exactly match an entry in the Figma app's Embed API "Allowed embed origins"
+// (docs/figma-setup.md) — without a client-id + an allowlisted origin, Figma's embed
+// only sends bare pass-through postMessages, never the richer PRESENTED_NODE_CHANGED
+// events this component listens for. `react-native-webview`'s `baseUrl` is what makes
+// an inline `source={{ html }}` document present *this* origin at all (Android/iOS
+// WebViews otherwise give inline HTML no real origin to allowlist).
+export const FIGMA_EMBED_BASE_URL = "https://synkoala.app";
+
 function buildEmbedHtml(figmaUrl: string): string {
-  const embedSrc = `https://www.figma.com/embed?embed_host=synkoala&url=${encodeURIComponent(figmaUrl)}`;
+  const clientIdParam = FIGMA_EMBED_CLIENT_ID
+    ? `&client-id=${encodeURIComponent(FIGMA_EMBED_CLIENT_ID)}`
+    : "";
+  const embedSrc = `https://www.figma.com/embed?embed_host=synkoala&url=${encodeURIComponent(figmaUrl)}${clientIdParam}`;
   return `<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1">
     <style>html,body,#figma-embed{margin:0;padding:0;height:100%;width:100%;border:none;}</style>
   </head><body>
@@ -43,9 +55,14 @@ function buildEmbedHtml(figmaUrl: string): string {
  *
  * 1. Automatic — every postMessage from the embed is logged (visible via
  *    `adb logcat | grep ReactNativeJS` while testing) and scanned for a
- *    node-id-shaped field. This is unverified against a real prototype:
- *    Figma's actual event name/payload shape may not match what's assumed
- *    here, which is exactly why steps weren't recording automatically.
+ *    node-id-shaped field. Getting the richer events (`PRESENTED_NODE_CHANGED`)
+ *    at all requires both `client-id` on the embed URL *and* `FIGMA_EMBED_BASE_URL`
+ *    being registered in that Figma app's Embed API "Allowed embed origins"
+ *    (docs/figma-setup.md) — without either, Figma silently downgrades to
+ *    bare pass-through messages, which is exactly why steps weren't recording
+ *    automatically before `EXPO_PUBLIC_FIGMA_EMBED_CLIENT_ID` existed. Still
+ *    unverified end-to-end against a live device (no way to run a mobile
+ *    WebView from this environment) — confirm via logcat before trusting it.
  * 2. Manual fallback — Log Tap/Scroll/Back buttons + a node-id field, kept
  *    so a capture session is never fully blocked while the automatic side
  *    gets diagnosed against real usage.
@@ -131,7 +148,7 @@ export function FigmaCaptureView({ figmaUrl, onStep }: Props) {
     <View style={styles.container}>
       <View style={styles.webviewWrapper}>
         <WebView
-          source={{ html }}
+          source={{ html, baseUrl: FIGMA_EMBED_BASE_URL }}
           onMessage={handleMessage}
           javaScriptEnabled
           domStorageEnabled

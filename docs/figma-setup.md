@@ -1,12 +1,23 @@
-# Figma OAuth setup
+# Figma setup
 
-The Stimulus Engine's Figma import (`planning/05-stimulus-engine.md`) needs a Figma OAuth
-app so researchers can connect their own Figma account and let the backend fetch
-prototype files on their behalf. This is a **one-time setup per deployment** — one app,
-one `FIGMA_CLIENT_ID`/`FIGMA_CLIENT_SECRET` pair — not per researcher. Each researcher
-then connects their *own* account separately (step 3 below).
+Two independent Figma integrations in this repo need their own credentials from the same
+Figma app, for two unrelated reasons:
+
+- **OAuth** (backend, §1-4 below) — lets the Stimulus Engine's Figma import
+  (`planning/05-stimulus-engine.md`) fetch a prototype file's structure on a researcher's
+  behalf. Needs `FIGMA_CLIENT_ID`/`FIGMA_CLIENT_SECRET`.
+- **Embed API** (mobile app, §5 below) — lets `FigmaCaptureView` (Journey Capture,
+  `planning/13-journey-capture.md`) receive real navigation events from the embedded
+  prototype player a human tester interacts with. Needs a separate Embed API client id.
+
+Both live under the same Figma app (one app, `figma.com/developers/apps`), but they're
+different credentials with different setup steps — don't confuse them.
 
 ## 1. Create the Figma OAuth app
+
+This is a **one-time setup per deployment** — one app, one
+`FIGMA_CLIENT_ID`/`FIGMA_CLIENT_SECRET` pair — not per researcher. Each researcher then
+connects their *own* account separately (step 3 below).
 
 1. Go to [figma.com/developers/apps](https://www.figma.com/developers/apps) (or click
    "My Apps" from the Figma toolbar).
@@ -75,3 +86,35 @@ prototype URL, then `POST /studies/:id/stimulus/analyze`) still needs the *conne
 account* to be able to view that file — owns it, has been shared it, or it's set to
 "Anyone with the link can view." A file the connected account can't open fails the import
 job with a clear error, not a silent empty import.
+
+## 5. Enable the Embed API for the mobile Journey Capture app
+
+`mobile/src/components/FigmaCaptureView.tsx` embeds Figma's prototype player in a WebView
+so a human tester can walk through it. Without this section's setup, that embed only ever
+sends bare pass-through `postMessage`s — Figma silently withholds the richer navigation
+events (`PRESENTED_NODE_CHANGED`) unless the embed is authenticated with a client id *and*
+loaded from an origin that app has explicitly allowlisted.
+
+1. In the same Figma app from §1 (`figma.com/developers/apps` → your app), open the
+   **Embed API** section. It shows its own **Client ID** — distinct from the OAuth
+   Client ID in §1; this one is meant to sit in a public embed URL, so it's fine to ship
+   it in the mobile app's bundled config, unlike the OAuth Client Secret.
+2. Under **Allowed embed origins**, add exactly:
+   ```
+   https://synkoala.app
+   ```
+   This has to match `FIGMA_EMBED_BASE_URL` in
+   `mobile/src/components/FigmaCaptureView.tsx` character-for-character. It's a label,
+   not a real served domain — `react-native-webview`'s `baseUrl` is what makes the
+   WebView's inline HTML present as being loaded from this origin at all (an Android/iOS
+   WebView otherwise gives inline HTML no origin Figma could allowlist). If you'd rather
+   use a domain you actually control, change both this Figma setting and
+   `FIGMA_EMBED_BASE_URL` together — they must always match.
+3. Set `EXPO_PUBLIC_FIGMA_EMBED_CLIENT_ID` in `mobile/.env` (see `mobile/.env.example`) to
+   the Embed API Client ID from step 1, then rebuild/restart the Expo app — Expo inlines
+   `EXPO_PUBLIC_*` vars at build time, so an already-running dev server won't pick up a
+   change without a restart.
+4. This is unverified against a live device as of this writing (no way to run a mobile
+   WebView from this environment) — confirm the richer events actually arrive via
+   `adb logcat | grep ReactNativeJS` before relying on automatic capture over the manual
+   Log Tap/Scroll/Back fallback.
