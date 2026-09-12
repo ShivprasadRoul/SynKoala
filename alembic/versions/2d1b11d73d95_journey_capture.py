@@ -9,6 +9,7 @@ Create Date: 2026-09-12 00:00:00.000000
 from collections.abc import Sequence
 
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
@@ -20,7 +21,10 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.add_column("tasks", sa.Column("intended_path", sa.dialects.postgresql.JSONB(), nullable=True))
+    op.add_column(
+        "tasks",
+        sa.Column("intended_path", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+    )
     op.add_column(
         "simulation_runs",
         sa.Column("source", sa.String(), nullable=False, server_default="SYNTHETIC"),

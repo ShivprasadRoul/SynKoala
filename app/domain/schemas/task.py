@@ -30,4 +30,5 @@ class TaskRead(BaseModel):
     success_conditions: dict | None
     constraints: dict | None
     expected_critical_actions: list[str] | None
+    intended_path: list[dict] | None
     created_at: datetime

@@ -1,17 +1,26 @@
+import json
+import uuid
+from datetime import UTC, datetime
 from functools import lru_cache
 
 import jwt
-from fastapi import Depends, HTTPException, status
+from cryptography.fernet import InvalidToken
+from fastapi import Depends, Header, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt import PyJWKClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
+from app.core import crypto
 from app.core.settings import settings
-from app.db.models import UserModel
+from app.db.models import ParticipantRunModel, UserModel
 from app.db.session import get_session
 from app.services.auth_service import AuthService
 
 bearer_scheme = HTTPBearer(auto_error=True)
+
+_TERMINAL_PARTICIPANT_STATUSES = ("COMPLETED", "FAILED", "ABANDONED")
 
 
 @lru_cache
@@ -55,3 +64,44 @@ async def get_current_user(
             detail="Token missing subject claim",
         )
     return await AuthService(session).get_or_create_user(user_id=sub, email=claims.get("email"))
+
+
+async def get_capture_token(
+    x_capture_token: str = Header(..., alias="X-Capture-Token"),
+    session: AsyncSession = Depends(get_session),
+) -> ParticipantRunModel:
+    """planning/13-journey-capture.md's capture-token dependency, sibling to
+    get_current_user, not a replacement for it — testers never get a Supabase
+    account. Header-based (not Authorization/HTTPBearer) to stay visually and
+    mechanically distinct from the Supabase JWT scheme."""
+    try:
+        payload = json.loads(crypto.decrypt(x_capture_token))
+        participant_run_id = uuid.UUID(payload["participant_run_id"])
+        expires_at = payload["exp"]
+    except (InvalidToken, ValueError, KeyError, json.JSONDecodeError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid capture token"
+        ) from exc
+    if datetime.now(UTC).timestamp() > expires_at:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Capture token expired"
+        )
+
+    participant_run = await session.scalar(
+        select(ParticipantRunModel)
+        .where(ParticipantRunModel.id == participant_run_id)
+        .options(selectinload(ParticipantRunModel.simulation_run))
+    )
+    if participant_run is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Participant run not found"
+        )
+    if participant_run.simulation_run.source != "HUMAN":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="Not a human capture session"
+        )
+    if participant_run.status in _TERMINAL_PARTICIPANT_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="Capture session already finished"
+        )
+    return participant_run

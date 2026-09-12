@@ -17,7 +17,12 @@ class SimulationRunService:
         self._session = session
 
     async def create_run(
-        self, study_id: uuid.UUID, population_size: int, config: dict | None, seed: int | None
+        self,
+        study_id: uuid.UUID,
+        population_size: int,
+        config: dict | None,
+        seed: int | None,
+        source: str = "SYNTHETIC",
     ) -> SimulationRunModel:
         run = SimulationRunModel(
             study_id=study_id,
@@ -25,6 +30,7 @@ class SimulationRunService:
             status="RUNNING",
             config=config,
             seed=seed,
+            source=source,
             started_at=datetime.now(UTC),
         )
         self._session.add(run)
@@ -32,12 +38,42 @@ class SimulationRunService:
         return run
 
     async def create_participant_run(
-        self, run_id: uuid.UUID, participant_id: uuid.UUID
+        self,
+        run_id: uuid.UUID,
+        participant_id: uuid.UUID | None = None,
+        tester_label: str | None = None,
     ) -> ParticipantRunModel:
+        # participant_id is None for a human tester's session
+        # (planning/13-journey-capture.md) — every synthetic caller still passes one.
         participant_run = ParticipantRunModel(
-            simulation_run_id=run_id, participant_id=participant_id, status="PENDING"
+            simulation_run_id=run_id,
+            participant_id=participant_id,
+            tester_label=tester_label,
+            status="PENDING" if participant_id is not None else "IN_PROGRESS",
+            started_at=None if participant_id is not None else datetime.now(UTC),
         )
         self._session.add(participant_run)
+        await self._session.flush()
+        return participant_run
+
+    async def increment_population_size(self, run: SimulationRunModel) -> SimulationRunModel:
+        run.population_size += 1
+        await self._session.flush()
+        return run
+
+    async def complete_participant_run(
+        self, participant_run: ParticipantRunModel, status: str, final_outcome: dict | None
+    ) -> ParticipantRunModel:
+        participant_run.status = status
+        participant_run.final_outcome = final_outcome
+        participant_run.completed_at = datetime.now(UTC)
+        await self._session.flush()
+        return participant_run
+
+    async def set_voice_note_url(
+        self, participant_run: ParticipantRunModel, voice_note_url: str
+    ) -> ParticipantRunModel:
+        participant_run.voice_note_url = voice_note_url
         await self._session.flush()
         return participant_run
 

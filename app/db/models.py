@@ -220,6 +220,9 @@ class TaskModel(BaseModel):
     success_conditions: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     constraints: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     expected_critical_actions: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # Defined journey (planning/13-journey-capture.md): the creator's own ground-truth
+    # walkthrough, captured once and submitted whole — not a stream, not a run.
+    intended_path: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     study: Mapped["StudyModel"] = relationship(back_populates="tasks")
@@ -255,6 +258,9 @@ class SimulationRunModel(BaseModel):
     study_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("studies.id"))
     population_size: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(String, nullable=False, server_default="PENDING")
+    # 'SYNTHETIC' | 'HUMAN' — planning/13-journey-capture.md. A human run reuses this
+    # exact table/status machine, so is_run_complete/finalize_run need no branching.
+    source: Mapped[str] = mapped_column(String, nullable=False, server_default="SYNTHETIC")
     config: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     model_versions: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     seed: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
@@ -286,9 +292,14 @@ class ParticipantRunModel(BaseModel):
     simulation_run_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("simulation_runs.id")
     )
-    participant_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("participants.id")
+    # NULL for a human tester's session (planning/13-journey-capture.md) — every
+    # synthetic-path caller (SimulationRunService.create_participant_run, the worker)
+    # always passes a real participant_id, so this relaxation doesn't affect them.
+    participant_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("participants.id"), nullable=True
     )
+    tester_label: Mapped[str | None] = mapped_column(String, nullable=True)
+    voice_note_url: Mapped[str | None] = mapped_column(String, nullable=True)
     status: Mapped[str] = mapped_column(String, nullable=False, server_default="PENDING")
     current_screen_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("screens.id"), nullable=True
@@ -316,6 +327,11 @@ class ObservationModel(BaseModel):
     type: Mapped[str] = mapped_column(String, nullable=False)
     screen_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     element_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    # Raw Figma node refs from a human capture session (planning/13-journey-capture.md)
+    # — resolved to screen_id/element_id only once the Stimulus Engine exists; this
+    # module never blocks on that resolution happening.
+    screen_figma_node_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    element_figma_node_id: Mapped[str | None] = mapped_column(String, nullable=True)
     x: Mapped[float | None] = mapped_column(Float, nullable=True)
     y: Mapped[float | None] = mapped_column(Float, nullable=True)
     duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)

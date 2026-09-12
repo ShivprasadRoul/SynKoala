@@ -70,3 +70,10 @@ class TaskService:
             task.expected_critical_actions = expected_critical_actions
         await self._session.flush()
         return task
+
+    async def set_intended_path(self, task: TaskModel, steps: list[dict]) -> TaskModel:
+        """planning/13-journey-capture.md: re-capturing replaces wholesale, doesn't
+        append — there is exactly one defined journey per task."""
+        task.intended_path = steps
+        await self._session.flush()
+        return task

@@ -49,6 +49,24 @@ class TasksRoutes:
     UPDATE = f"/{FLAT_BASE_PATH}/{{task_id}}"
 
 
+class JourneyCaptureRoutes:
+    """planning/13-journey-capture.md / LLD §18. Intended-path and human-run/session
+    creation are creator-authenticated (get_current_user); observations/voice-note/
+    complete are capture-token-authenticated (get_capture_token) — called by the
+    mobile capture app itself, with no Supabase login."""
+
+    TAGS = ["journey-capture"]
+    TASK_BASE_PATH = "studies/{study_id}/tasks/{task_id}"
+    INTENDED_PATH = f"/{TASK_BASE_PATH}/intended-path"
+    HUMAN_RUNS = f"/{TASK_BASE_PATH}/human-runs"
+    HUMAN_RUNS_FLAT_BASE_PATH = "human-runs"
+    SESSIONS = f"/{HUMAN_RUNS_FLAT_BASE_PATH}/{{run_id}}/sessions"
+    PARTICIPANT_RUNS_FLAT_BASE_PATH = "participant-runs"
+    OBSERVATIONS = f"/{PARTICIPANT_RUNS_FLAT_BASE_PATH}/{{participant_run_id}}/observations"
+    VOICE_NOTE = f"/{PARTICIPANT_RUNS_FLAT_BASE_PATH}/{{participant_run_id}}/voice-note"
+    COMPLETE = f"/{PARTICIPANT_RUNS_FLAT_BASE_PATH}/{{participant_run_id}}/complete"
+
+
 class BenchmarkRoutes:
     TAGS = ["benchmark"]
     BASE_PATH = "studies/{study_id}/benchmark"
