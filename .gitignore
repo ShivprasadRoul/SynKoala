@@ -22,3 +22,6 @@ ai-agent-skills-backend-development.zip
 # worktree exists as a sibling directory picks it up as a gitlink (mode 160000)
 # instead of skipping it, since it contains its own `.git` file.
 .claude/worktrees/
+
+# Scratch files from ad-hoc debugging (e.g. local Figma embed reproduction probes)
+.tmp_probe/
