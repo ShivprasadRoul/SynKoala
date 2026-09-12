@@ -7,7 +7,7 @@ from sqlalchemy import select
 
 from app.db.models import JobModel
 from app.db.session import async_session_factory
-from app.workers.jobs import HANDLERS
+from app.workers.jobs import HANDLERS, ON_PERMANENT_FAILURE
 
 logger = logging.getLogger("app.workers.runner")
 
@@ -60,6 +60,17 @@ async def _process_job(job_id: uuid.UUID) -> None:
                 MAX_ATTEMPTS,
                 exc,
             )
+            if job.status == "FAILED":
+                on_permanent_failure = ON_PERMANENT_FAILURE.get(job.job_type)
+                if on_permanent_failure is not None:
+                    try:
+                        await on_permanent_failure(session, job.payload)
+                    except Exception:
+                        logger.exception(
+                            "job %s (%s) permanent-failure bookkeeping also failed",
+                            job.id,
+                            job.job_type,
+                        )
         else:
             job.status = "DONE"
         await session.commit()

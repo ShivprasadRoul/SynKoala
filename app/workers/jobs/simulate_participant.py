@@ -17,6 +17,7 @@ from app.agents.types import (
 from app.core.errors import LifecycleError
 from app.db.models import ObservationModel, ScreenModel, ScreenTransitionModel, TaskModel
 from app.services.audience_service import AudienceService
+from app.services.job_service import JobService
 from app.services.simulation_run_service import SimulationRunService
 from app.services.stimulus_service import StimulusService
 from app.services.task_service import TaskService
@@ -83,6 +84,34 @@ def _task_context_from_orm(task: TaskModel) -> TaskContext:
     )
 
 
+async def _finalize_run_and_notify(
+    session: AsyncSession, runs: SimulationRunService, jobs: JobService, run_id: uuid.UUID
+) -> None:
+    """Shared by the normal completion path and the permanent-job-failure
+    fallback below — both need the exact same "am I the last participant?"
+    bookkeeping (planning/06-study-orchestrator.md item 4)."""
+    if await runs.is_run_complete(run_id):
+        run = await runs.finalize_run(run_id)
+        if run.status == "COMPLETED":
+            # First link of the aggregate_run -> validate_run -> generate_insights
+            # chain (planning/06's "Job chain") — the rest is each of those jobs'
+            # own responsibility to enqueue on completion, once they exist
+            # (planning/09,10,11). None of them are built yet, so the chain
+            # currently always stops (cleanly) at aggregate_run.
+            await jobs.enqueue("aggregate_run", {"simulation_run_id": str(run_id)})
+
+    run = await runs.get_by_id(run_id)
+    snapshot = {
+        "status": run.status,
+        "completed": await runs.count_terminal(run_id),
+        "total": await runs.count_total(run_id),
+    }
+    await session.execute(
+        text("SELECT pg_notify(:channel, :payload)"),
+        {"channel": f"run_progress_{run_id}", "payload": json.dumps(snapshot)},
+    )
+
+
 def _derive_participant_seed(run_seed: int | None, participant_id: uuid.UUID) -> str:
     """Every participant must get its own reproducible-but-distinct RNG stream
     (PRD §7) — the run-level `seed` alone can't be reused verbatim for every
@@ -103,6 +132,7 @@ async def handle_simulate_participant(session: AsyncSession, payload: dict) -> N
     audiences = AudienceService(session)
     tasks = TaskService(session)
     stimuli = StimulusService(session)
+    jobs = JobService(session)
 
     run_id = uuid.UUID(payload["simulation_run_id"])
     participant_run_id = uuid.UUID(payload["participant_run_id"])
@@ -172,15 +202,31 @@ async def handle_simulate_participant(session: AsyncSession, payload: dict) -> N
         },
         current_screen_id=final_state["current_screen_id"],
     )
-    if await runs.is_run_complete(run_id):
-        await runs.finalize_run(run_id)
+    await _finalize_run_and_notify(session, runs, jobs, run_id)
 
-    snapshot = {
-        "status": run.status,
-        "completed": await runs.count_terminal(run_id),
-        "total": await runs.count_total(run_id),
-    }
-    await session.execute(
-        text("SELECT pg_notify(:channel, :payload)"),
-        {"channel": f"run_progress_{run_id}", "payload": json.dumps(snapshot)},
-    )
+
+async def handle_simulate_participant_permanent_failure(
+    session: AsyncSession, payload: dict
+) -> None:
+    """Runs once `app/workers/runner.py` gives up retrying a `simulate_participant`
+    job (after `MAX_ATTEMPTS`). Without this, a participant whose job fails
+    before `handle_simulate_participant` ever reaches `complete_participant_run`
+    (e.g. the "no analyzed screens yet" `LifecycleError` above) leaves its
+    `participant_runs` row PENDING forever — `is_run_complete` then never sees
+    every participant as terminal, so the run itself could never finalize. The
+    PRD §7 reliability requirement is explicit that a job-level failure must be
+    "recorded as a failed participant, never failing the whole run"
+    (planning/06-study-orchestrator.md item 4) — this is what makes that hold
+    even when the failure happens before any bookkeeping write."""
+    runs = SimulationRunService(session)
+    jobs = JobService(session)
+    run_id = uuid.UUID(payload["simulation_run_id"])
+    participant_run_id = uuid.UUID(payload["participant_run_id"])
+
+    participant_run = await runs.get_participant_run(participant_run_id)
+    if participant_run.status not in ("COMPLETED", "FAILED", "ABANDONED"):
+        await runs.complete_participant_run(
+            participant_run, status="FAILED", final_outcome={"error": "job_permanently_failed"}
+        )
+
+    await _finalize_run_and_notify(session, runs, jobs, run_id)
