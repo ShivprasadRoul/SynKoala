@@ -20,4 +20,4 @@ uv run black .                           # format
 uv run alembic upgrade head              # apply migrations (needs a real DATABASE_URL)
 ```
 
-See `.env.example` for required environment variables.
+See `.env.example` for required environment variables. Setting up Figma import specifically (creating the OAuth app, getting `FIGMA_CLIENT_ID`/`FIGMA_CLIENT_SECRET`) is covered in [`docs/figma-setup.md`](docs/figma-setup.md).
