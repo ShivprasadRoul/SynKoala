@@ -16,3 +16,9 @@ ai-agent-skills-backend-development.zip
 
 # Local Claude Code settings (machine-specific)
 .claude/settings.local.json
+
+# Worktrees for in-progress branch work (EnterWorktree) — ephemeral, never a commit
+# target. Without this, `git add -A`/`git add .` from the primary checkout while a
+# worktree exists as a sibling directory picks it up as a gitlink (mode 160000)
+# instead of skipping it, since it contains its own `.git` file.
+.claude/worktrees/
