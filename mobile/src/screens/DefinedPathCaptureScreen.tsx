@@ -9,7 +9,7 @@ import {
   View,
 } from "react-native";
 
-import { submitIntendedPath } from "../api/journeyCapture";
+import { createSimulationRun, submitIntendedPath } from "../api/journeyCapture";
 import { FigmaCaptureView, type CapturedStep } from "../components/FigmaCaptureView";
 import type { Study, Task } from "../types";
 
@@ -45,11 +45,39 @@ export function DefinedPathCaptureScreen({ token, study, task, onDone }: Props) 
           duration_ms: s.durationMs,
         }))
       );
-      onDone();
     } catch (err) {
+      setSubmitting(false);
       Alert.alert("Failed to submit", err instanceof Error ? err.message : "Unknown error");
+      return;
+    }
+
+    // The study is already confirmed READY before this screen is reachable
+    // (CreatorPickerScreen gates it) — only the sample size can still be
+    // missing, since it's optional at study creation.
+    if (!study.population_size) {
+      setSubmitting(false);
+      Alert.alert(
+        "Path saved",
+        "The defined path was saved, but this study has no sample size set (set it on the study in the web dashboard) — start the simulation from there instead."
+      );
+      onDone();
+      return;
+    }
+
+    try {
+      await createSimulationRun(token, study.id, {
+        population_size: study.population_size,
+        task_id: task.id,
+      });
+      Alert.alert("Path saved", `Simulation started for ${study.population_size} participants.`);
+    } catch (err) {
+      Alert.alert(
+        "Path saved, but the simulation didn't start",
+        err instanceof Error ? err.message : "Unknown error"
+      );
     } finally {
       setSubmitting(false);
+      onDone();
     }
   }
 

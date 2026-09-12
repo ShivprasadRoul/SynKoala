@@ -4,6 +4,7 @@ export interface Study {
   name: string;
   objective: string | null;
   status: string;
+  population_size: number | null;
 }
 
 export interface Task {

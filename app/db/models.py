@@ -79,6 +79,11 @@ class StudyModel(BaseModel):
     name: Mapped[str] = mapped_column(String, nullable=False)
     objective: Mapped[str | None] = mapped_column(String, nullable=True)
     status: Mapped[str] = mapped_column(String, nullable=False, server_default="DRAFT")
+    # The researcher's intended sample size for this study, set once at creation
+    # (web app) — the default population_size for any run started against it,
+    # including the mobile app's auto-started simulation after a defined-path
+    # walkthrough (planning/13-journey-capture.md), so it isn't re-typed per run.
+    population_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

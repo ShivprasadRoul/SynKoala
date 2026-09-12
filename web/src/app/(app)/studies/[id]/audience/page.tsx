@@ -11,6 +11,7 @@ import { Card, CardTitle } from "@/components/ui/Card";
 import { Input, Label, Textarea } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { addPersona, createAudience, generatePopulation, getAudience } from "@/lib/api/audiences";
+import { getStudy } from "@/lib/api/studies";
 import type { AudienceDefinition, Persona, TraitBand } from "@/lib/types";
 import { TRAIT_BANDS } from "@/lib/types";
 
@@ -99,7 +100,12 @@ export default function AudiencePage() {
   });
 
   // --- Step 3: sample a synthetic population from the audience's distribution ---
-  const [populationSize, setPopulationSize] = useState(50);
+  // Defaults to the study's own sample size (set at creation) rather than a
+  // hardcoded number — the same default the mobile app uses when it
+  // auto-starts a run after a defined-path walkthrough.
+  const { data: study } = useQuery({ queryKey: ["study", studyId], queryFn: () => getStudy(studyId) });
+  const [populationSizeOverride, setPopulationSizeOverride] = useState<number | null>(null);
+  const populationSize = populationSizeOverride ?? study?.population_size ?? 50;
   const [seed, setSeed] = useState<string>("");
   const [lastGeneratedCount, setLastGeneratedCount] = useState<number | null>(null);
 
@@ -345,7 +351,7 @@ export default function AudiencePage() {
               max={1000}
               className="w-32"
               value={populationSize}
-              onChange={(e) => setPopulationSize(Number(e.target.value))}
+              onChange={(e) => setPopulationSizeOverride(Number(e.target.value))}
             />
           </div>
           <div className="flex flex-col gap-1.5">

@@ -18,8 +18,20 @@ class StudyService:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def create(self, project_id: uuid.UUID, name: str, objective: str | None) -> StudyModel:
-        study = StudyModel(project_id=project_id, name=name, objective=objective, status="DRAFT")
+    async def create(
+        self,
+        project_id: uuid.UUID,
+        name: str,
+        objective: str | None,
+        population_size: int | None = None,
+    ) -> StudyModel:
+        study = StudyModel(
+            project_id=project_id,
+            name=name,
+            objective=objective,
+            status="DRAFT",
+            population_size=population_size,
+        )
         self._session.add(study)
         await self._session.flush()
         return study
@@ -54,6 +66,7 @@ class StudyService:
         name: str | None = None,
         objective: str | None = None,
         status: str | None = None,
+        population_size: int | None = None,
     ) -> StudyModel:
         if status is not None and status != study.status:
             allowed = STUDY_STATUS_TRANSITIONS.get(study.status, ())
@@ -64,6 +77,8 @@ class StudyService:
             study.name = name
         if objective is not None:
             study.objective = objective
+        if population_size is not None:
+            study.population_size = population_size
         await self._session.flush()
         # `updated_at` is server-computed (onupdate=func.now()) — flush() alone
         # leaves it stale/expired, which blows up with MissingGreenlet if this

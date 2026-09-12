@@ -11,6 +11,7 @@ export interface Study {
   name: string;
   objective: string | null;
   status: StudyStatus;
+  population_size: number | null;
   created_at: string;
   updated_at: string;
 }

@@ -12,9 +12,11 @@ export default function NewStudyPage() {
   const router = useRouter();
   const [name, setName] = useState("");
   const [objective, setObjective] = useState("");
+  const [populationSize, setPopulationSize] = useState(50);
 
   const mutation = useMutation({
-    mutationFn: () => createStudy({ name, objective: objective || null }),
+    mutationFn: () =>
+      createStudy({ name, objective: objective || null, population_size: populationSize }),
     onSuccess: (study) => router.push(`/studies/${study.id}`),
   });
 
@@ -49,6 +51,22 @@ export default function NewStudyPage() {
             value={objective}
             onChange={(e) => setObjective(e.target.value)}
           />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="population-size">Sample size</Label>
+          <Input
+            id="population-size"
+            type="number"
+            min={1}
+            max={1000}
+            value={populationSize}
+            onChange={(e) => setPopulationSize(Number(e.target.value))}
+          />
+          <p className="text-[12px] text-ink-tertiary">
+            Default population for this study&apos;s runs — used when generating the audience
+            and when a run is started without its own size, e.g. auto-started from the mobile
+            app after a defined-path walkthrough.
+          </p>
         </div>
         {mutation.isError && (
           <p className="text-[13px] text-semantic-warn">

@@ -35,12 +35,16 @@ class ProjectRead(BaseModel):
 class StudyCreate(BaseModel):
     name: str
     objective: str | None = None
+    population_size: int | None = Field(
+        default=None, ge=1, le=1000, description="Intended sample size for this study's runs"
+    )
 
 
 class StudyUpdate(BaseModel):
     name: str | None = None
     objective: str | None = None
     status: str | None = Field(default=None, description="Must be a valid lifecycle transition")
+    population_size: int | None = Field(default=None, ge=1, le=1000)
 
 
 class StudyRead(BaseModel):
@@ -51,5 +55,6 @@ class StudyRead(BaseModel):
     name: str
     objective: str | None
     status: str
+    population_size: int | None
     created_at: datetime
     updated_at: datetime

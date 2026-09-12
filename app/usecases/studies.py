@@ -16,9 +16,15 @@ class StudyUseCase:
         self._studies = StudyService(session)
         self._projects = ProjectService(session)
 
-    async def create(self, user: UserModel, name: str, objective: str | None) -> StudyModel:
+    async def create(
+        self,
+        user: UserModel,
+        name: str,
+        objective: str | None,
+        population_size: int | None = None,
+    ) -> StudyModel:
         project = await self._projects.get_or_create_default(user.id)
-        study = await self._studies.create(project.id, name, objective)
+        study = await self._studies.create(project.id, name, objective, population_size)
         await self._session.commit()
         return study
 
@@ -36,9 +42,12 @@ class StudyUseCase:
         name: str | None = None,
         objective: str | None = None,
         status: str | None = None,
+        population_size: int | None = None,
     ) -> StudyModel:
         study = await self._studies.get_owned(user, study_id)
-        study = await self._studies.update(study, name=name, objective=objective, status=status)
+        study = await self._studies.update(
+            study, name=name, objective=objective, status=status, population_size=population_size
+        )
         await self._session.commit()
         return study
 

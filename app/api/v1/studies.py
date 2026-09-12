@@ -22,7 +22,7 @@ async def create_study(
     session: AsyncSession = Depends(get_session),
 ) -> StudyRead:
     use_case = StudyUseCase(session)
-    study = await use_case.create(current_user, body.name, body.objective)
+    study = await use_case.create(current_user, body.name, body.objective, body.population_size)
     return StudyRead.model_validate(study)
 
 
@@ -61,6 +61,7 @@ async def update_study(
         name=body.name,
         objective=body.objective,
         status=body.status,
+        population_size=body.population_size,
     )
     return StudyRead.model_validate(study)
 

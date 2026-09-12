@@ -61,6 +61,11 @@ export function CreatorPickerScreen({ token, onRecordDefinedPath, onStartTesterS
               <Text style={styles.rowSubtitle}>{item.status}</Text>
             </TouchableOpacity>
           )}
+          ListEmptyComponent={
+            <Text style={styles.empty}>
+              No studies yet for this account. Create one from the web research dashboard first.
+            </Text>
+          }
         />
       </View>
     );
@@ -79,20 +84,36 @@ export function CreatorPickerScreen({ token, onRecordDefinedPath, onStartTesterS
               <Text style={styles.rowTitle}>{item.instruction}</Text>
             </TouchableOpacity>
           )}
+          ListEmptyComponent={
+            <Text style={styles.empty}>
+              No tasks yet for this study. Create one from the web research dashboard first.
+            </Text>
+          }
         />
       </View>
     );
   }
 
+  const isReady = selectedStudy.status === "READY";
+
   return (
     <View style={styles.container}>
       <Text style={styles.heading}>{selectedTask.instruction}</Text>
-      <TouchableOpacity
-        style={styles.button}
-        onPress={() => onRecordDefinedPath(selectedStudy, selectedTask)}
-      >
-        <Text style={styles.buttonText}>Record defined path</Text>
-      </TouchableOpacity>
+      {isReady ? (
+        <TouchableOpacity
+          style={styles.button}
+          onPress={() => onRecordDefinedPath(selectedStudy, selectedTask)}
+        >
+          <Text style={styles.buttonText}>Record defined path</Text>
+        </TouchableOpacity>
+      ) : (
+        <Text style={styles.notReady}>
+          This study is {selectedStudy.status.toLowerCase()}, not READY yet — finish setting up
+          the audience, task, and stimulus in the web dashboard and mark it READY before
+          recording a defined path here (recording one auto-starts a simulation run, which
+          needs the study to be READY).
+        </Text>
+      )}
       <TouchableOpacity
         style={[styles.button, styles.secondary]}
         onPress={() => onStartTesterSession(selectedStudy, selectedTask)}
@@ -111,6 +132,8 @@ const styles = StyleSheet.create({
   rowTitle: { fontSize: 16, fontWeight: "600" },
   rowSubtitle: { color: "#777" },
   error: { color: "#b91c1c", padding: 24 },
+  empty: { color: "#777", paddingTop: 24, textAlign: "center" },
+  notReady: { color: "#a15a00", lineHeight: 20 },
   button: { backgroundColor: "#1d4ed8", borderRadius: 10, padding: 16, alignItems: "center" },
   secondary: { backgroundColor: "#334155" },
   buttonText: { color: "#fff", fontSize: 16, fontWeight: "600" },

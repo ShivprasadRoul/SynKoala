@@ -33,6 +33,21 @@ export function submitIntendedPath(
   );
 }
 
+// Not journey-capture-specific — the ordinary synthetic-simulation endpoint
+// (app/api/v1/simulations.py) — auto-started after a defined-path submission
+// using the study's own configured sample size (set at creation, web app).
+export function createSimulationRun(
+  token: string,
+  studyId: string,
+  input: { population_size: number; task_id: string; seed?: number | null }
+) {
+  return apiFetch<SimulationRun>(
+    `/studies/${studyId}/simulations`,
+    { kind: "bearer", token },
+    { body: input }
+  );
+}
+
 export function createHumanRun(token: string, studyId: string, taskId: string) {
   return apiFetch<SimulationRun>(
     `/studies/${studyId}/tasks/${taskId}/human-runs`,
