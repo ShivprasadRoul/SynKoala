@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from app.core.errors import LifecycleError
-from app.usecases.stimulus import StimulusUseCase
+from app.usecases.stimulus import StimulusFileUpload, StimulusUseCase
 
 
 class _NoOpSession:
@@ -79,3 +79,61 @@ async def test_create_never_checks_figma_for_a_non_figma_stimulus():
 
     assert result is fake_stimulus
     use_case._figma_oauth.get_connection.assert_not_awaited()
+
+
+async def test_create_bulk_uploads_one_stimulus_per_file_named_from_its_filename():
+    use_case = _use_case()
+    fake_stimuli = [Mock(), Mock(), Mock()]
+    use_case._stimuli.create_with_asset.side_effect = fake_stimuli
+    files = [
+        StimulusFileUpload(file_bytes=b"a", content_type="image/png", filename="Launch screen.png"),
+        StimulusFileUpload(
+            file_bytes=b"b", content_type="image/png", filename="Create new account.png"
+        ),
+        StimulusFileUpload(file_bytes=b"c", content_type="image/png", filename="Verify email.png"),
+    ]
+
+    result = await use_case.create_bulk(
+        user=Mock(id=uuid.uuid4()), study_id=uuid.uuid4(), stimulus_type="mobile_ui", files=files
+    )
+
+    assert result == fake_stimuli
+    assert use_case._stimuli.create_with_asset.await_count == 3
+    filenames_passed = [
+        call.args[-1] for call in use_case._stimuli.create_with_asset.await_args_list
+    ]
+    assert filenames_passed == ["Launch screen.png", "Create new account.png", "Verify email.png"]
+
+
+async def test_create_bulk_never_checks_figma_connection():
+    """Bulk upload always carries real file bytes — there is no `type ==
+    'figma'` case for it to guard against, unlike single-file `create`."""
+    use_case = _use_case()
+    use_case._stimuli.create_with_asset.return_value = Mock()
+
+    await use_case.create_bulk(
+        user=Mock(id=uuid.uuid4()),
+        study_id=uuid.uuid4(),
+        stimulus_type="mobile_ui",
+        files=[StimulusFileUpload(file_bytes=b"a", content_type="image/png", filename="a.png")],
+    )
+
+    use_case._figma_oauth.get_connection.assert_not_awaited()
+
+
+async def test_create_bulk_commits_once_for_the_whole_batch():
+    use_case = _use_case()
+    use_case._session.commit = AsyncMock()
+    use_case._stimuli.create_with_asset.side_effect = [Mock(), Mock()]
+
+    await use_case.create_bulk(
+        user=Mock(id=uuid.uuid4()),
+        study_id=uuid.uuid4(),
+        stimulus_type="mobile_ui",
+        files=[
+            StimulusFileUpload(file_bytes=b"a", content_type="image/png", filename="a.png"),
+            StimulusFileUpload(file_bytes=b"b", content_type="image/png", filename="b.png"),
+        ],
+    )
+
+    use_case._session.commit.assert_awaited_once()

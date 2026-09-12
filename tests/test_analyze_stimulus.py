@@ -6,6 +6,7 @@ from app.workers.jobs.analyze_stimulus import _resolve_transitions, _screen_summ
 
 HOME_ID = uuid.uuid4()
 CONFIRM_ID = uuid.uuid4()
+CHECKOUT_ID = uuid.uuid4()
 CTA_ID = uuid.uuid4()
 
 
@@ -35,6 +36,17 @@ def _confirm_screen() -> ScreenModel:
         id=CONFIRM_ID,
         stimulus_id=uuid.uuid4(),
         screen_key="confirm",
+        width=390,
+        height=844,
+        elements=[],
+    )
+
+
+def _checkout_screen() -> ScreenModel:
+    return ScreenModel(
+        id=CHECKOUT_ID,
+        stimulus_id=uuid.uuid4(),
+        screen_key="checkout",
         width=390,
         height=844,
         elements=[],
@@ -100,3 +112,36 @@ def test_resolve_transitions_drops_hallucinated_references():
 
     assert len(resolved) == 1
     assert resolved[0]["trigger_element_id"] == CTA_ID
+
+
+def test_resolve_transitions_keeps_only_the_first_destination_for_a_conflicting_trigger():
+    """Regression test: one button in one screen state cannot navigate to two
+    different screens. A model that reports the same (from_screen, element)
+    with two different destinations (observed in practice — see chat) must
+    resolve to exactly one edge, not both; without this, `execute_action`'s
+    `next(...)` over `transitions_from` would pick whichever conflicting edge
+    Postgres happened to return first, non-reproducible for the same
+    participant/seed (PRD §7)."""
+    screens = [_home_screen(), _confirm_screen(), _checkout_screen()]
+    first_edge = InferredTransition(
+        from_screen_key="home", element_key="cta", action="CLICK", to_screen_key="confirm"
+    )
+    conflicting_edge = InferredTransition(
+        from_screen_key="home", element_key="cta", action="CLICK", to_screen_key="checkout"
+    )
+
+    resolved = _resolve_transitions(screens, [first_edge, conflicting_edge])
+
+    assert len(resolved) == 1
+    assert resolved[0]["to_screen_id"] == CONFIRM_ID
+
+
+def test_resolve_transitions_collapses_an_exact_duplicate_edge():
+    screens = [_home_screen(), _confirm_screen()]
+    edge = InferredTransition(
+        from_screen_key="home", element_key="cta", action="CLICK", to_screen_key="confirm"
+    )
+
+    resolved = _resolve_transitions(screens, [edge, edge])
+
+    assert len(resolved) == 1

@@ -37,13 +37,19 @@ async def _finalize_run_and_notify(
     bookkeeping (planning/06-study-orchestrator.md item 4)."""
     if await runs.is_run_complete(run_id):
         run = await runs.finalize_run(run_id)
-        if run.status == "COMPLETED":
+        if run.status in ("COMPLETED", "FAILED"):
             # First link of the aggregate_run -> validate_run -> generate_insights
-            # chain (planning/06's "Job chain") — the rest is each of those jobs'
-            # own responsibility to enqueue on completion. aggregate_run (planning/09)
-            # and validate_run (planning/10) are both real now; generate_insights
-            # (planning/11) isn't, so the chain currently stops (cleanly, via the
-            # same claimed/retried/permanently-failed stub path) there.
+            # chain (planning/06's "Job chain"). Triggered for FAILED too, not
+            # just COMPLETED: `finalize_run` marks a run FAILED whenever *zero*
+            # participants completed, but that's precisely the population-level
+            # result — task success is the headline metric, and 0% completion
+            # is a headline result, not a reason to skip analysis. Skipping it
+            # here used to mean a 100%-drop-off run got no metrics/friction/
+            # discoverability analysis at all, exactly when that analysis
+            # matters most (PRD §7's own "friction explains why success isn't
+            # higher" framing). Only CANCELLING->CANCELLED (a researcher-
+            # interrupted run, not one that reached its own terminal state)
+            # still skips this.
             await jobs.enqueue("aggregate_run", {"simulation_run_id": str(run_id)})
 
     run = await runs.get_by_id(run_id)

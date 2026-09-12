@@ -12,7 +12,7 @@ from app.core.storage import StorageError, signed_url_or_none
 from app.db.models import UserModel
 from app.db.session import get_session
 from app.domain.schemas.stimulus import AnalyzeJobRead, StimulusRead
-from app.usecases.stimulus import StimulusUseCase
+from app.usecases.stimulus import StimulusFileUpload, StimulusUseCase
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +73,33 @@ async def create_stimulus(
     stimulus_read = StimulusRead.model_validate(stimulus)
     await _sign_screen_urls([stimulus_read])
     return stimulus_read
+
+
+@stimuli_router_v1.post(
+    StimuliRoutes.BULK_CREATE,
+    response_model=list[StimulusRead],
+    status_code=status.HTTP_201_CREATED,
+)
+async def bulk_create_stimuli(
+    study_id: uuid.UUID,
+    type: str = Form(...),
+    files: list[UploadFile] = File(...),
+    current_user: UserModel = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> list[StimulusRead]:
+    uploads = [
+        StimulusFileUpload(
+            file_bytes=await file.read(),
+            content_type=file.content_type,
+            filename=file.filename or "",
+        )
+        for file in files
+    ]
+    use_case = StimulusUseCase(session)
+    stimuli = await use_case.create_bulk(current_user, study_id, type, uploads)
+    reads = [StimulusRead.model_validate(s) for s in stimuli]
+    await _sign_screen_urls(reads)
+    return reads
 
 
 @stimuli_router_v1.post(

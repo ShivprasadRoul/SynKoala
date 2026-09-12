@@ -1,4 +1,5 @@
 import uuid
+from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -8,6 +9,17 @@ from app.services.figma_oauth_service import FigmaOAuthService
 from app.services.job_service import JobService
 from app.services.stimulus_service import StimulusService
 from app.services.study_service import StudyService
+
+
+@dataclass
+class StimulusFileUpload:
+    """One file of a bulk upload (`create_bulk`) — `filename` is what
+    `StimulusService._unique_screen_key` derives each screen's `screen_key`
+    from, same as a single upload's `original_filename`."""
+
+    file_bytes: bytes
+    content_type: str | None
+    filename: str
 
 
 class StimulusUseCase:
@@ -57,6 +69,37 @@ class StimulusUseCase:
         )
         await self._session.commit()
         return stimulus
+
+    async def create_bulk(
+        self,
+        user: UserModel,
+        study_id: uuid.UUID,
+        stimulus_type: str,
+        files: list[StimulusFileUpload],
+    ) -> list[StimulusModel]:
+        """Uploads several screenshots in one call — each still becomes its
+        own `stimuli`/`screens` row exactly like a single `create` upload
+        (planning/05: one screen per stimulus), just without a round-trip per
+        file. Always a real file upload, never `type == "figma"` (a Figma
+        import has no file to upload at all — planning/05's import path is a
+        single `source_url`, not a batch of assets), so this skips `create`'s
+        Figma-connection check entirely rather than reject every call for a
+        type it was never going to receive."""
+        await self._studies.get_owned(user, study_id)
+        stimuli = [
+            await self._stimuli.create_with_asset(
+                study_id,
+                stimulus_type,
+                None,
+                upload.file_bytes,
+                upload.content_type,
+                None,
+                upload.filename,
+            )
+            for upload in files
+        ]
+        await self._session.commit()
+        return stimuli
 
     async def list_stimuli(self, user: UserModel, study_id: uuid.UUID) -> list[StimulusModel]:
         await self._studies.get_owned(user, study_id)

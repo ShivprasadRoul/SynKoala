@@ -17,6 +17,16 @@ export function uploadStimulus(
   return apiFetch<Stimulus>(`/studies/${studyId}/stimulus`, { formData });
 }
 
+// Uploads several screenshots in one request — each becomes its own stimulus/
+// screen, named from its own filename, exactly like uploadStimulus does one
+// at a time (app/usecases/stimulus.py:create_bulk).
+export function bulkUploadStimuli(studyId: string, input: { type: string; files: File[] }) {
+  const formData = new FormData();
+  formData.append("type", input.type);
+  for (const file of input.files) formData.append("files", file);
+  return apiFetch<Stimulus[]>(`/studies/${studyId}/stimulus/bulk`, { formData });
+}
+
 export function analyzeStimuli(studyId: string) {
   return apiFetch<{ job_id: string; status: string }[]>(`/studies/${studyId}/stimulus/analyze`, {
     method: "POST",

@@ -93,13 +93,34 @@ async def test_finalize_run_and_notify_enqueues_aggregate_run_once_completed():
     fake_jobs.enqueue.assert_awaited_once_with("aggregate_run", {"simulation_run_id": str(run_id)})
 
 
-async def test_finalize_run_and_notify_does_not_enqueue_aggregate_run_when_run_failed():
+async def test_finalize_run_and_notify_enqueues_aggregate_run_even_when_every_participant_failed():
+    """A FAILED run (finalize_run's own status when zero participants
+    completed) must still get analyzed — 0% completion is a real,
+    headline-level result the Analytics Engine's friction/discoverability
+    metrics exist to explain, not a reason to skip analysis entirely."""
     run_id = uuid.uuid4()
     failed_run = Mock(status="FAILED")
     fake_runs = _fake_runs_service()
     fake_runs.is_run_complete.return_value = True
     fake_runs.finalize_run.return_value = failed_run
     fake_runs.get_by_id.return_value = failed_run
+    fake_jobs = AsyncMock()
+
+    await job_module._finalize_run_and_notify(_FakeSession(), fake_runs, fake_jobs, run_id)
+
+    fake_jobs.enqueue.assert_awaited_once_with("aggregate_run", {"simulation_run_id": str(run_id)})
+
+
+async def test_finalize_run_and_notify_does_not_enqueue_aggregate_run_when_cancelled():
+    """Unlike FAILED, a CANCELLED run was explicitly interrupted by the
+    researcher, not left to reach its own terminal state — its data isn't a
+    genuine population result, so it's still excluded from analysis."""
+    run_id = uuid.uuid4()
+    cancelled_run = Mock(status="CANCELLED")
+    fake_runs = _fake_runs_service()
+    fake_runs.is_run_complete.return_value = True
+    fake_runs.finalize_run.return_value = cancelled_run
+    fake_runs.get_by_id.return_value = cancelled_run
     fake_jobs = AsyncMock()
 
     await job_module._finalize_run_and_notify(_FakeSession(), fake_runs, fake_jobs, run_id)

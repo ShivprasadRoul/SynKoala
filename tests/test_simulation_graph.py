@@ -26,6 +26,12 @@ CTA_ID = uuid.uuid4()
 HELP_ID = uuid.uuid4()
 SUCCESS_ID = uuid.uuid4()
 
+LAUNCH_ID = uuid.uuid4()
+MIDDLE_ID = uuid.uuid4()
+FINAL_ID = uuid.uuid4()
+LAUNCH_CTA_ID = uuid.uuid4()
+MIDDLE_CTA_ID = uuid.uuid4()
+
 
 def _shoe_task_screen_graph() -> ScreenGraph:
     home = ScreenView(
@@ -89,6 +95,66 @@ def _shoe_task_screen_graph() -> ScreenGraph:
         )
     ]
     return ScreenGraph(screens={HOME_ID: home, CONFIRM_ID: confirm}, transitions=transitions)
+
+
+def _multi_screen_onboarding_graph() -> ScreenGraph:
+    """launch -> middle -> final, where BOTH launch and middle carry their own
+    'primary_action'-role button — reproduces the exact regression this file's
+    new tests below guard against: a critical-action list naming a shared
+    *role* (not a specific element) used to let the very first click, on the
+    very first screen, complete the whole task."""
+    launch = ScreenView(
+        id=LAUNCH_ID,
+        screen_key="launch",
+        width=390,
+        height=844,
+        elements=[
+            ElementView(
+                id=LAUNCH_CTA_ID,
+                element_key="create_account_button",
+                type="button",
+                text="Create an account",
+                bbox=(20, 300, 370, 360),
+                semantic_role="primary_action",
+                interactable=True,
+            )
+        ],
+    )
+    middle = ScreenView(
+        id=MIDDLE_ID,
+        screen_key="middle",
+        width=390,
+        height=844,
+        elements=[
+            ElementView(
+                id=MIDDLE_CTA_ID,
+                element_key="continue_button",
+                type="button",
+                text="Continue",
+                bbox=(20, 300, 370, 360),
+                semantic_role="primary_action",
+                interactable=True,
+            )
+        ],
+    )
+    final = ScreenView(id=FINAL_ID, screen_key="final", width=390, height=844, elements=[])
+    transitions = [
+        TransitionView(
+            from_screen_id=LAUNCH_ID,
+            trigger_element_id=LAUNCH_CTA_ID,
+            action="CLICK",
+            to_screen_id=MIDDLE_ID,
+        ),
+        TransitionView(
+            from_screen_id=MIDDLE_ID,
+            trigger_element_id=MIDDLE_CTA_ID,
+            action="CLICK",
+            to_screen_id=FINAL_ID,
+        ),
+    ]
+    return ScreenGraph(
+        screens={LAUNCH_ID: launch, MIDDLE_ID: middle, FINAL_ID: final}, transitions=transitions
+    )
 
 
 def _participant(**trait_overrides: float) -> ParticipantDraft:
@@ -216,3 +282,105 @@ def test_get_participant_model_defaults_to_heuristic():
     assert isinstance(get_participant_model(None), HeuristicParticipantModel)
     assert isinstance(get_participant_model("unknown"), HeuristicParticipantModel)
     assert isinstance(get_participant_model("random"), RandomParticipantModel)
+
+
+async def test_a_shared_role_critical_action_cannot_complete_a_task_from_the_first_screen():
+    """Regression test for the exact bug reported: `expected_critical_actions`
+    naming a *role* shared by every screen's own primary CTA (not a specific
+    element) used to let the very first click, on the very first screen,
+    mark task_progress=1.0 and the run COMPLETED in a single step — before
+    ever reaching the task's actual success screen. With a recognized
+    success_condition defined, critical actions are milestones only (capped
+    at 0.99); the task can only ever complete by genuinely reaching `final`."""
+    screen_graph = _multi_screen_onboarding_graph()
+    task = TaskContext(
+        id=uuid.uuid4(),
+        instruction="Create a new account",
+        starting_point="launch",
+        success_conditions={"screen_key": "final"},
+        constraints=None,
+        expected_critical_actions=["primary_action"],
+    )
+    participant = _participant(goal_directedness=0.9, exploration=0.2)
+
+    result = await run_simulation(
+        participant=participant,
+        task=task,
+        screen_graph=screen_graph,
+        starting_screen_id=screen_graph.resolve_starting_screen(task.starting_point),
+        seed=7,
+        participant_model=HeuristicParticipantModel(),
+        max_steps=20,
+    )
+
+    assert not (
+        result["step"] == 1 and result["outcome"] == "COMPLETED"
+    ), "clicking the launch screen's primary action alone must not complete the task"
+    if result["outcome"] == "COMPLETED":
+        assert result["current_screen_id"] == FINAL_ID
+        assert result["step"] >= 2, "reaching the final screen requires at least 2 clicks"
+        assert result["task_progress"] == 1.0
+
+
+async def test_no_success_condition_or_critical_actions_never_fabricates_completion():
+    """The other half of the same bug: with neither success_conditions nor
+    expected_critical_actions defined at all, clicking a primary_action
+    element used to unconditionally set task_progress=1.0. There is no
+    genuine completion signal in this configuration, so the task must never
+    report COMPLETED — only a real terminal state (ABANDONED/FAILED) once the
+    participant gives up or runs out of steps, i.e. a drop-off."""
+    screen_graph = _multi_screen_onboarding_graph()
+    task = TaskContext(
+        id=uuid.uuid4(),
+        instruction="Explore the app",
+        starting_point="launch",
+        success_conditions=None,
+        constraints=None,
+        expected_critical_actions=None,
+    )
+    participant = _participant(goal_directedness=0.9, exploration=0.2)
+
+    result = await run_simulation(
+        participant=participant,
+        task=task,
+        screen_graph=screen_graph,
+        starting_screen_id=screen_graph.resolve_starting_screen(task.starting_point),
+        seed=7,
+        participant_model=HeuristicParticipantModel(),
+        max_steps=15,
+    )
+
+    assert result["outcome"] != "COMPLETED"
+    assert result["task_progress"] < 1.0
+
+
+async def test_unrecognized_success_conditions_shape_does_not_block_critical_actions():
+    """A freeform success_conditions dict using none of the recognized keys
+    (screen_key/element_key/semantic_role) — planning/12-web-app.md's own
+    example, {"beneficiary_credited": true} — has no defined evaluation
+    semantics anywhere in this codebase, so it must not silently block a
+    task that otherwise fully satisfies its own expected_critical_actions
+    from ever completing (falls back to the pre-existing, tested contract)."""
+    screen_graph = _shoe_task_screen_graph()
+    task = TaskContext(
+        id=uuid.uuid4(),
+        instruction="Add a running shoe under 5000 to cart",
+        starting_point="home",
+        success_conditions={"beneficiary_credited": True},
+        constraints=None,
+        expected_critical_actions=["cta"],
+    )
+    participant = _participant(goal_directedness=0.9, exploration=0.2)
+
+    result = await run_simulation(
+        participant=participant,
+        task=task,
+        screen_graph=screen_graph,
+        starting_screen_id=screen_graph.resolve_starting_screen(task.starting_point),
+        seed=7,
+        participant_model=HeuristicParticipantModel(),
+        max_steps=30,
+    )
+
+    assert result["outcome"] == "COMPLETED"
+    assert result["task_progress"] == 1.0

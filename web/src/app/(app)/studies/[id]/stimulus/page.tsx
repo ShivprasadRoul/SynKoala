@@ -5,7 +5,7 @@ import { useParams } from "next/navigation";
 import { useState } from "react";
 
 import { getFigmaAuthorizeUrl, getFigmaStatus } from "@/lib/api/auth";
-import { analyzeStimuli, listStimuli, uploadStimulus } from "@/lib/api/stimulus";
+import { analyzeStimuli, bulkUploadStimuli, listStimuli, uploadStimulus } from "@/lib/api/stimulus";
 
 import { Button } from "@/components/ui/Button";
 import { Card, CardDescription, CardTitle } from "@/components/ui/Card";
@@ -56,16 +56,18 @@ export default function StimulusPage() {
     },
   });
 
-  // --- Upload a screenshot: analysis is a separate, explicit step so several
-  // screenshots can be uploaded first and analyzed together in one job batch. ---
+  // --- Upload screenshots: any number at once, each named from its own
+  // filename (app/services/stimulus_service.py's _unique_screen_key) —
+  // analysis is a separate, explicit step so they can all be analyzed
+  // together in one job batch afterward. ---
   const [type, setType] = useState("mobile_ui");
-  const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
 
   const uploadMutation = useMutation({
-    mutationFn: () => uploadStimulus(studyId, { type, file, sourceUrl: null }),
+    mutationFn: () => bulkUploadStimuli(studyId, { type, files }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["stimuli", studyId] });
-      setFile(null);
+      setFiles([]);
     },
   });
 
@@ -182,17 +184,24 @@ export default function StimulusPage() {
                 <Input id="type" value={type} onChange={(e) => setType(e.target.value)} />
               </div>
               <div className="flex flex-col gap-1.5">
-                <Label htmlFor="file">Image file</Label>
+                <Label htmlFor="file">Image file(s)</Label>
                 <input
                   id="file"
                   type="file"
                   required
+                  multiple
                   accept="image/*"
-                  onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+                  onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
                   className="rounded-md border border-hairline bg-surface-card px-3 py-2 text-[13px] text-ink-muted shadow-sm"
                 />
               </div>
             </div>
+            {files.length > 0 && (
+              <p className="text-[12px] text-ink-tertiary">
+                {files.length} file{files.length === 1 ? "" : "s"} selected — each will be named
+                from its filename.
+              </p>
+            )}
             {uploadMutation.isError && (
               <p className="text-[13px] text-semantic-warn">
                 {uploadMutation.error instanceof Error
@@ -203,10 +212,14 @@ export default function StimulusPage() {
             <Button
               type="submit"
               variant="secondary"
-              disabled={uploadMutation.isPending}
+              disabled={uploadMutation.isPending || files.length === 0}
               className="self-start"
             >
-              {uploadMutation.isPending ? "Uploading…" : "Upload screenshot"}
+              {uploadMutation.isPending
+                ? "Uploading…"
+                : files.length > 1
+                  ? `Upload ${files.length} screenshots`
+                  : "Upload screenshot"}
             </Button>
           </form>
           {hasUnanalyzedScreenshot && (

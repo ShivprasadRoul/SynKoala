@@ -37,6 +37,7 @@ class StimuliRoutes:
     TAGS = ["stimulus"]
     BASE_PATH = "studies/{study_id}/stimulus"
     LIST_CREATE = f"/{BASE_PATH}"
+    BULK_CREATE = f"/{BASE_PATH}/bulk"
     ANALYZE = f"/{BASE_PATH}/analyze"
 
 

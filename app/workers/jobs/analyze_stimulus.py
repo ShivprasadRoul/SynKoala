@@ -1,3 +1,4 @@
+import logging
 import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,6 +15,8 @@ from app.core.errors import LifecycleError
 from app.core.storage import download_object
 from app.db.models import ScreenModel
 from app.services.stimulus_service import StimulusService
+
+logger = logging.getLogger(__name__)
 
 
 def _elements_for_persistence(analysis: ScreenAnalysis) -> list[dict]:
@@ -53,20 +56,45 @@ def _resolve_transitions(
     rows, dropping anything that doesn't resolve — the model is asked never to
     invent one (see `vision_provider.py`'s system prompt), but "never let a
     model self-report what it can't back up" (`.claude/skills/backend-feature/
-    SKILL.md` §4) means the caller can't just trust that."""
+    SKILL.md` §4) means the caller can't just trust that.
+
+    Also enforces that a single (screen, trigger element) can resolve to at
+    most one destination screen — one button in one app state cannot navigate
+    two different places, so a second, conflicting destination for a trigger
+    already seen is dropped (first inferred edge wins) rather than persisted.
+    Without this, `execute_action`'s `next(... for t in transitions_from(...))`
+    would pick whichever of several contradictory edges Postgres happened to
+    return first — undefined, and not reproducible run-to-run for the same
+    participant/seed (PRD §7)."""
     screens_by_key = {screen.screen_key: screen for screen in screens}
     elements_by_screen_and_key = {
         (screen.screen_key, element.element_key): element
         for screen in screens
         for element in screen.elements
     }
-    transitions = []
+    transitions: list[dict] = []
+    seen_triggers: dict[tuple[uuid.UUID, uuid.UUID], uuid.UUID] = {}
     for edge in inferred:
         from_screen = screens_by_key.get(edge.from_screen_key)
         to_screen = screens_by_key.get(edge.to_screen_key)
         trigger_element = elements_by_screen_and_key.get((edge.from_screen_key, edge.element_key))
         if from_screen is None or to_screen is None or trigger_element is None:
             continue
+        trigger_key = (from_screen.id, trigger_element.id)
+        existing_destination = seen_triggers.get(trigger_key)
+        if existing_destination is not None:
+            if existing_destination != to_screen.id:
+                logger.warning(
+                    "infer_transitions: dropping conflicting destination for "
+                    "screen=%s element=%s — already resolved to %s, model also "
+                    "reported %s",
+                    edge.from_screen_key,
+                    edge.element_key,
+                    existing_destination,
+                    to_screen.id,
+                )
+            continue
+        seen_triggers[trigger_key] = to_screen.id
         transitions.append(
             {
                 "from_screen_id": from_screen.id,

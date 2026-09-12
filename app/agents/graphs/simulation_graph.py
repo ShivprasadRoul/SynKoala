@@ -38,7 +38,7 @@ from app.agents.providers.participant_model import (
     ParticipantState,
     SimulationContext,
 )
-from app.agents.types import ParticipantDraft, ScreenGraph, ScreenView, TaskContext
+from app.agents.types import ElementView, ParticipantDraft, ScreenGraph, ScreenView, TaskContext
 
 Outcome = Literal["IN_PROGRESS", "COMPLETED", "FAILED", "ABANDONED"]
 
@@ -145,15 +145,62 @@ def _build_context(state: SimulationState, screen: ScreenView) -> SimulationCont
     )
 
 
-def _element_semantic_role(screen_graph: ScreenGraph, target: str | None) -> str | None:
+def _find_element(screen_graph: ScreenGraph, target: str | None) -> ElementView | None:
     if not target:
         return None
     element_id = uuid.UUID(target)
     for screen in screen_graph.screens.values():
         element = screen.element(element_id)
         if element is not None:
-            return element.semantic_role
+            return element
     return None
+
+
+def _has_recognized_success_condition(success_conditions: dict | None) -> bool:
+    """Only `screen_key`/`element_key`/`semantic_role` are given real evaluation
+    semantics below — `success_conditions` is a freeform JSONB column with no
+    defined shape anywhere else in this codebase (planning/12-web-app.md's own
+    example, `{"beneficiary_credited": true}`, is an arbitrary business fact we
+    have no way to check from simulated UI events). A dict using none of these
+    three keys is treated the same as no success_conditions at all for gating
+    purposes below, rather than either crashing on it or inventing a parser for
+    a shape nothing has ever defined."""
+    if not success_conditions:
+        return False
+    return any(key in success_conditions for key in ("screen_key", "element_key", "semantic_role"))
+
+
+def _success_condition_met(
+    screen_graph: ScreenGraph,
+    success_conditions: dict | None,
+    current_screen_id: uuid.UUID,
+    action_history: list[dict],
+) -> bool:
+    """The task's actual completion signal (LLD §12) — distinct from
+    `expected_critical_actions`, which are milestones *toward* completion, not
+    completion itself (see `update_state`'s docstring below). Any one
+    recognized key present and satisfied is sufficient (OR semantics)."""
+    if not _has_recognized_success_condition(success_conditions):
+        return False
+
+    target_screen_key = success_conditions.get("screen_key")
+    if target_screen_key is not None:
+        current_screen = screen_graph.screens.get(current_screen_id)
+        if current_screen is not None and current_screen.screen_key == target_screen_key:
+            return True
+
+    target_element_key = success_conditions.get("element_key")
+    target_semantic_role = success_conditions.get("semantic_role")
+    if target_element_key is not None or target_semantic_role is not None:
+        for entry in action_history:
+            element = _find_element(screen_graph, entry.get("target"))
+            if element is None:
+                continue
+            if target_element_key is not None and element.element_key == target_element_key:
+                return True
+            if target_semantic_role is not None and element.semantic_role == target_semantic_role:
+                return True
+    return False
 
 
 async def orient(state: SimulationState, config: RunnableConfig) -> dict:
@@ -321,39 +368,50 @@ async def execute_action(state: SimulationState, config: RunnableConfig) -> dict
 
 
 async def update_state(state: SimulationState, config: RunnableConfig) -> dict:
-    """LLD §12 Task Evaluation's progress computation — matches consumed
-    elements against `task.expected_critical_actions`, falling back to a
-    generic exploration signal when a task doesn't declare any."""
-    screen_graph = state["screen_graph"]
-    critical = set(state["task"].expected_critical_actions or [])
+    """LLD §12 Task Evaluation's progress computation.
 
-    if critical:
+    `task.success_conditions`, when it names a recognized `screen_key`/
+    `element_key`/`semantic_role` (see `_success_condition_met`), is the task's
+    actual finish line — reaching it is the only way `progress` hits 1.0.
+    `task.expected_critical_actions` are milestones/evidence *toward* that
+    finish line, not the finish line itself: with a recognized success
+    condition defined, matching every critical action only ever reaches 0.99,
+    never 1.0, so a task can't complete just because a researcher's critical-
+    action list happens to be satisfiable in one click (the exact bug a
+    generic `expected_critical_actions=["primary_action"]` config used to
+    trigger — matching a semantic *role* shared by every screen's own primary
+    CTA let literally the first click "complete" a whole multi-screen task).
+    Without a recognized success condition, critical actions alone can still
+    complete the task (matches the pre-existing, tested contract), and with
+    neither success_conditions nor critical actions at all, progress is capped
+    at 0.9 by exploration alone — the task can only ever be resolved by
+    ABANDONED/FAILED (max_steps, dead end, low patience), never a fabricated
+    COMPLETED. A run that never reaches this finish line is, by construction,
+    a drop-off — it terminates ABANDONED/FAILED, never COMPLETED."""
+    screen_graph = state["screen_graph"]
+    task = state["task"]
+    critical = set(task.expected_critical_actions or [])
+    has_success_condition = _has_recognized_success_condition(task.success_conditions)
+
+    if has_success_condition and _success_condition_met(
+        screen_graph, task.success_conditions, state["current_screen_id"], state["action_history"]
+    ):
+        progress = 1.0
+    elif critical:
         matched: set[str] = set()
         for entry in state["action_history"]:
-            target = entry.get("target")
-            if not target:
-                continue
-            element_id = uuid.UUID(target)
-            element = next(
-                (
-                    s.element(element_id)
-                    for s in screen_graph.screens.values()
-                    if s.element(element_id)
-                ),
-                None,
-            )
+            element = _find_element(screen_graph, entry.get("target"))
             if element is None:
                 continue
             matched |= {element.element_key, element.semantic_role or ""} & critical
-        progress = len(matched) / len(critical)
+        raw_progress = len(matched) / len(critical)
+        # A recognized success condition is the only thing allowed to award
+        # 1.0 — critical actions are evidence of progress toward it, not a
+        # substitute finish line, so cap just short of "done" until it's met.
+        progress = min(raw_progress, 0.99) if has_success_condition else raw_progress
     else:
-        primary_action_clicked = any(
-            entry.get("action") in ("CLICK", "TAP", "SELECT")
-            and _element_semantic_role(screen_graph, entry.get("target")) == "primary_action"
-            for entry in state["action_history"]
-        )
         distinct_screens = len(set(state["screen_history"]) | {state["current_screen_id"]})
-        progress = 1.0 if primary_action_clicked else min(0.9, 0.15 * distinct_screens)
+        progress = min(0.9, 0.15 * distinct_screens)
 
     events = list(state["events"])
     sequence_no = state["sequence_no"]
