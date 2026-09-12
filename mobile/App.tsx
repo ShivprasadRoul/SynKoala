@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { ActivityIndicator, SafeAreaView, StatusBar, StyleSheet, View } from "react-native";
+import { ActivityIndicator, StatusBar, StyleSheet, View } from "react-native";
+import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 
 import { CreatorLoginScreen } from "./src/screens/CreatorLoginScreen";
 import { CreatorPickerScreen } from "./src/screens/CreatorPickerScreen";
@@ -41,101 +42,105 @@ export default function App() {
     loadSettings().then(() => setReady(true));
   }, []);
 
-  if (!ready) {
-    return (
-      <SafeAreaView style={styles.safeArea}>
-        <View style={styles.loading}>
-          <ActivityIndicator />
-        </View>
-      </SafeAreaView>
-    );
-  }
-
   let content;
-  switch (screen.name) {
-    case "home":
-      content = (
-        <HomeScreen
-          onSelectCreator={() => setScreen({ name: "creator-login" })}
-          onSelectTester={() => setScreen({ name: "tester-entry" })}
-          onOpenSettings={() => setScreen({ name: "settings" })}
-          apiBaseUrl={getApiBaseUrl()}
-        />
-      );
-      break;
-    case "settings":
-      content = <SettingsScreen onDone={() => setScreen({ name: "home" })} />;
-      break;
-    case "creator-login":
-      content = (
-        <CreatorLoginScreen
-          onLoggedIn={(token) => setScreen({ name: "creator-picker", token })}
-          onCancel={() => setScreen({ name: "home" })}
-        />
-      );
-      break;
-    case "creator-picker":
-      content = (
-        <CreatorPickerScreen
-          token={screen.token}
-          onRecordDefinedPath={(study, task) =>
-            setScreen({ name: "defined-path", token: screen.token, study, task })
-          }
-          onStartTesterSession={(study, task) =>
-            setScreen({ name: "start-session", token: screen.token, study, task })
-          }
-        />
-      );
-      break;
-    case "defined-path":
-      content = (
-        <DefinedPathCaptureScreen
-          token={screen.token}
-          study={screen.study}
-          task={screen.task}
-          onDone={() => setScreen({ name: "done", message: "Defined journey saved." })}
-        />
-      );
-      break;
-    case "start-session":
-      content = (
-        <StartTesterSessionScreen
-          token={screen.token}
-          study={screen.study}
-          task={screen.task}
-          onHandOffToTester={(params) => setScreen({ name: "tester-capture", ...params })}
-        />
-      );
-      break;
-    case "tester-entry":
-      content = (
-        <TesterEntryScreen
-          onEnter={(params) => setScreen({ name: "tester-capture", ...params })}
-          onCancel={() => setScreen({ name: "home" })}
-        />
-      );
-      break;
-    case "tester-capture":
-      content = (
-        <TesterCaptureScreen
-          captureToken={screen.captureToken}
-          participantRunId={screen.participantRunId}
-          figmaUrl={screen.figmaUrl}
-          instruction={screen.instruction}
-          onFinished={() => setScreen({ name: "done", message: "Thanks — your session was recorded." })}
-        />
-      );
-      break;
-    case "done":
-      content = <DoneScreen message={screen.message} onRestart={() => setScreen({ name: "home" })} />;
-      break;
+  if (!ready) {
+    content = (
+      <View style={styles.loading}>
+        <ActivityIndicator />
+      </View>
+    );
+  } else {
+    switch (screen.name) {
+      case "home":
+        content = (
+          <HomeScreen
+            onSelectCreator={() => setScreen({ name: "creator-login" })}
+            onSelectTester={() => setScreen({ name: "tester-entry" })}
+            onOpenSettings={() => setScreen({ name: "settings" })}
+            apiBaseUrl={getApiBaseUrl()}
+          />
+        );
+        break;
+      case "settings":
+        content = <SettingsScreen onDone={() => setScreen({ name: "home" })} />;
+        break;
+      case "creator-login":
+        content = (
+          <CreatorLoginScreen
+            onLoggedIn={(token) => setScreen({ name: "creator-picker", token })}
+            onCancel={() => setScreen({ name: "home" })}
+          />
+        );
+        break;
+      case "creator-picker":
+        content = (
+          <CreatorPickerScreen
+            token={screen.token}
+            onRecordDefinedPath={(study, task) =>
+              setScreen({ name: "defined-path", token: screen.token, study, task })
+            }
+            onStartTesterSession={(study, task) =>
+              setScreen({ name: "start-session", token: screen.token, study, task })
+            }
+          />
+        );
+        break;
+      case "defined-path":
+        content = (
+          <DefinedPathCaptureScreen
+            token={screen.token}
+            study={screen.study}
+            task={screen.task}
+            onDone={() => setScreen({ name: "done", message: "Defined journey saved." })}
+          />
+        );
+        break;
+      case "start-session":
+        content = (
+          <StartTesterSessionScreen
+            token={screen.token}
+            study={screen.study}
+            task={screen.task}
+            onHandOffToTester={(params) => setScreen({ name: "tester-capture", ...params })}
+          />
+        );
+        break;
+      case "tester-entry":
+        content = (
+          <TesterEntryScreen
+            onEnter={(params) => setScreen({ name: "tester-capture", ...params })}
+            onCancel={() => setScreen({ name: "home" })}
+          />
+        );
+        break;
+      case "tester-capture":
+        content = (
+          <TesterCaptureScreen
+            captureToken={screen.captureToken}
+            participantRunId={screen.participantRunId}
+            figmaUrl={screen.figmaUrl}
+            instruction={screen.instruction}
+            onFinished={() =>
+              setScreen({ name: "done", message: "Thanks — your session was recorded." })
+            }
+          />
+        );
+        break;
+      case "done":
+        content = (
+          <DoneScreen message={screen.message} onRestart={() => setScreen({ name: "home" })} />
+        );
+        break;
+    }
   }
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <StatusBar barStyle="dark-content" />
-      {content}
-    </SafeAreaView>
+    <SafeAreaProvider>
+      <SafeAreaView style={styles.safeArea}>
+        <StatusBar barStyle="dark-content" />
+        {content}
+      </SafeAreaView>
+    </SafeAreaProvider>
   );
 }
 

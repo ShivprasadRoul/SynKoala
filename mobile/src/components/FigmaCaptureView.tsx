@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Animated, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { useEffect, useMemo, useRef } from "react";
+import { Animated, StyleSheet, Text, View } from "react-native";
 import { WebView, type WebViewMessageEvent } from "react-native-webview";
 
 import type { CapturedAction } from "../types";
@@ -34,15 +34,25 @@ function buildEmbedHtml(figmaUrl: string): string {
 
 /**
  * Embeds Figma's prototype player (Embed Kit 2.0) and turns its postMessage
- * events into captured steps, with a manual fallback for node ids the embed
- * doesn't surface. planning/13-journey-capture.md flags verifying the
- * PRESENTED_NODE_CHANGED payload shape against a real prototype as an early
- * spike — this hasn't been exercised against a live Figma file yet.
+ * events into captured steps automatically — no manual tap/scroll/back
+ * buttons. Figma's embed only reports PRESENTED_NODE_CHANGED (which screen is
+ * now showing), not how the tester got there, so every automatically detected
+ * step is logged as a generic navigation ("TAP") — there's no API-level way to
+ * tell tap/scroll/swipe-back apart from inside the embed. If it turns out
+ * PRESENTED_NODE_CHANGED doesn't fire reliably for some prototype, this is the
+ * one place to revisit (planning/13-journey-capture.md's "verify against a
+ * real prototype" spike).
+ *
+ * A Figma file gated behind "must be logged in to view" will show Figma's own
+ * login screen here — there's no way to bypass that with a cached API token
+ * (the backend's Figma OAuth token authenticates REST API calls, not this
+ * WebView's browser session; they're unrelated auth systems). The prototype
+ * being captured must be shared as "Anyone with the link can view" in Figma,
+ * since human testers never have a Figma account either.
  */
 export function FigmaCaptureView({ figmaUrl, onStep }: Props) {
   const html = useMemo(() => buildEmbedHtml(figmaUrl), [figmaUrl]);
   const lastStepAt = useRef(Date.now());
-  const [pendingNodeId, setPendingNodeId] = useState("");
 
   // A pulsing red border + badge around the prototype view — the visible
   // signal that a capture session is actively recording, for as long as this
@@ -60,16 +70,11 @@ export function FigmaCaptureView({ figmaUrl, onStep }: Props) {
     return () => loop.stop();
   }, [pulse]);
 
-  function logStep(action: CapturedAction, nodeIdOverride?: string) {
+  function logStep(action: CapturedAction, screenFigmaNodeId: string) {
     const now = Date.now();
     const durationMs = now - lastStepAt.current;
     lastStepAt.current = now;
-    onStep({
-      screenFigmaNodeId: nodeIdOverride ?? (pendingNodeId.trim() || "unknown"),
-      elementFigmaNodeId: null,
-      action,
-      durationMs,
-    });
+    onStep({ screenFigmaNodeId, elementFigmaNodeId: null, action, durationMs });
   }
 
   function handleMessage(event: WebViewMessageEvent) {
@@ -90,34 +95,14 @@ export function FigmaCaptureView({ figmaUrl, onStep }: Props) {
           source={{ html }}
           onMessage={handleMessage}
           javaScriptEnabled
+          domStorageEnabled
+          thirdPartyCookiesEnabled
+          sharedCookiesEnabled
           style={styles.webview}
         />
-        <Animated.View
-          pointerEvents="none"
-          style={[styles.recordingBorder, { opacity: pulse }]}
-        />
+        <Animated.View pointerEvents="none" style={[styles.recordingBorder, { opacity: pulse }]} />
         <View pointerEvents="none" style={styles.recordingBadge}>
           <Text style={styles.recordingBadgeText}>● Capturing</Text>
-        </View>
-      </View>
-      <View style={styles.controls}>
-        <TextInput
-          style={styles.input}
-          placeholder="Figma node id (manual fallback)"
-          value={pendingNodeId}
-          onChangeText={setPendingNodeId}
-          autoCapitalize="none"
-        />
-        <View style={styles.buttonRow}>
-          <TouchableOpacity style={styles.button} onPress={() => logStep("TAP")}>
-            <Text style={styles.buttonText}>Log Tap</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.button} onPress={() => logStep("SCROLL")}>
-            <Text style={styles.buttonText}>Log Scroll</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.button} onPress={() => logStep("BACK")}>
-            <Text style={styles.buttonText}>Log Back</Text>
-          </TouchableOpacity>
         </View>
       </View>
     </View>
@@ -147,15 +132,4 @@ const styles = StyleSheet.create({
     borderRadius: 999,
   },
   recordingBadgeText: { color: "#fff", fontSize: 12, fontWeight: "700" },
-  controls: { padding: 12, borderTopWidth: 1, borderTopColor: "#ddd", gap: 8 },
-  input: { borderWidth: 1, borderColor: "#ccc", borderRadius: 8, padding: 8 },
-  buttonRow: { flexDirection: "row", gap: 8 },
-  button: {
-    flex: 1,
-    backgroundColor: "#1d4ed8",
-    borderRadius: 8,
-    padding: 10,
-    alignItems: "center",
-  },
-  buttonText: { color: "#fff", fontWeight: "600" },
 });
