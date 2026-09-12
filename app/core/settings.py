@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     supabase_jwt_audience: str = "authenticated"
     supabase_storage_bucket: str = "stimuli"
 
+    # Web App (planning/12-web-app.md) — a browser at a different origin than the API
+    cors_allowed_origins: list[str] = ["http://localhost:3000"]
+
     # Figma OAuth (account-linking flow, not sign-in — planning/01-auth.md)
     figma_client_id: str | None = None
     figma_client_secret: str | None = None

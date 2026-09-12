@@ -1,0 +1,73 @@
+@import "tailwindcss";
+
+/* Design tokens ported verbatim from ~/Desktop/SynKoala-Landing's app/src/index.css —
+   that repo's shipped code is the brand's source of truth (its DesignSystem/design.md
+   describes an older, unshipped dark theme — not this). Keep this block in sync if the
+   landing site's tokens change. */
+@theme {
+  --font-sans: "Inter", -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
+  --font-display: "Archivo", "Inter", -apple-system, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --color-primary: #c6ff3d;
+  --color-primary-strong: #a8db2e;
+  --color-primary-soft: #dcff80;
+  --color-primary-deep: #4a5f0c;
+  --color-on-primary: #111210;
+
+  --color-ink: #131410;
+  --color-ink-muted: #53564c;
+  --color-ink-subtle: #63665a;
+  --color-ink-tertiary: #6e7161;
+
+  --color-canvas: #faf9f4;
+  --color-surface-1: #f1efe4;
+  --color-surface-2: #e8e4d2;
+  --color-surface-3: #ddd8c0;
+
+  --color-hairline: #dcd7c6;
+  --color-hairline-strong: #948c6e;
+
+  --color-semantic-warn: #a15a00;
+  --color-semantic-info: #2f5fa6;
+
+  --radius-sm: 0px;
+  --radius-md: 0px;
+  --radius-lg: 2px;
+  --radius-xl: 2px;
+}
+
+@layer base {
+  * {
+    border-color: var(--color-hairline);
+  }
+
+  html {
+    background-color: var(--color-canvas);
+    color-scheme: light;
+  }
+
+  body {
+    background-color: var(--color-canvas);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  ::selection {
+    background-color: var(--color-primary);
+    color: var(--color-on-primary);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-on-primary);
+    outline-offset: 2px;
+  }
+}
+
+@layer utilities {
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
+}
