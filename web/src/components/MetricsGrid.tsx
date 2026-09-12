@@ -1,4 +1,5 @@
 import { Card } from "@/components/ui/Card";
+import { EmptyState } from "@/components/ui/EmptyState";
 import type { Metric, MetricsResponse } from "@/lib/types";
 
 const LEVEL_LABELS: Record<keyof MetricsResponse, string> = {
@@ -16,13 +17,10 @@ export function MetricsGrid({ metrics }: { metrics: MetricsResponse }) {
 
   if (!hasAny) {
     return (
-      <Card>
-        <p className="text-[14px] text-ink-muted">
-          No metrics computed for this run yet. Metrics are derived from participant
-          observations once a run completes — this is expected until the Simulation Engine is
-          wired up.
-        </p>
-      </Card>
+      <EmptyState
+        title="No metrics yet"
+        description="Metrics are derived from participant observations once a run completes — this is expected until the Simulation Engine is wired up."
+      />
     );
   }
 
@@ -30,7 +28,7 @@ export function MetricsGrid({ metrics }: { metrics: MetricsResponse }) {
     <div className="grid gap-6 sm:grid-cols-3">
       {levels.map((level) => (
         <div key={level} className="flex flex-col gap-3">
-          <h3 className="text-[13px] font-semibold uppercase tracking-[0.04em] text-ink-subtle">
+          <h3 className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-tertiary">
             {LEVEL_LABELS[level]}
           </h3>
           <div className="flex flex-col gap-2">
@@ -52,7 +50,7 @@ function MetricCard({ metric }: { metric: Metric }) {
     <Card className="p-4">
       <div className="flex items-baseline justify-between gap-3">
         <span className="text-[13px] text-ink-muted">{metric.metric}</span>
-        <span className="font-mono text-[20px] font-semibold tabular-nums text-ink">
+        <span className="font-mono text-[22px] font-bold tabular-nums text-ink">
           {metric.value ?? "—"}
         </span>
       </div>

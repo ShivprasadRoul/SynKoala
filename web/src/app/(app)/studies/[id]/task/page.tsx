@@ -5,7 +5,7 @@ import { useParams } from "next/navigation";
 import { useState } from "react";
 
 import { Button } from "@/components/ui/Button";
-import { Card, CardTitle } from "@/components/ui/Card";
+import { Card, CardDescription, CardTitle } from "@/components/ui/Card";
 import { Input, Label, Textarea } from "@/components/ui/Input";
 import { createTask, listTasks } from "@/lib/api/tasks";
 
@@ -33,30 +33,36 @@ export default function TaskPage() {
   if (isLoading) return <p className="text-[14px] text-ink-muted">Loading tasks…</p>;
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
       {tasks && tasks.length > 0 && (
-        <div className="flex flex-col gap-3">
+        <div className="flex flex-1 flex-col gap-3">
           {tasks.map((task) => (
             <Card key={task.id}>
-              <p className="text-[15px] text-ink">{task.instruction}</p>
+              <span className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-tertiary">
+                Goal
+              </span>
+              <p className="mt-1.5 text-[15px] font-medium text-ink">{task.instruction}</p>
               {task.starting_point && (
-                <p className="mt-1 text-[13px] text-ink-tertiary">
-                  Starting point: {task.starting_point}
-                </p>
+                <div className="mt-3 border-t border-hairline pt-3">
+                  <span className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-tertiary">
+                    Starting point
+                  </span>
+                  <p className="mt-1 text-[13px] text-ink-muted">{task.starting_point}</p>
+                </div>
               )}
             </Card>
           ))}
         </div>
       )}
 
-      <Card>
+      <Card className="flex-1">
         <CardTitle>
-          {tasks && tasks.length > 0 ? "Add another task" : "Define the Critical User Task"}
+          {tasks && tasks.length > 0 ? "Add another task" : "Define the critical user task"}
         </CardTitle>
-        <p className="mt-2 text-[13px] text-ink-muted">
+        <CardDescription className="mt-2">
           The business-relevant journey a participant attempts — e.g. &quot;add a running shoe
           under ₹5,000 to cart&quot;, not an arbitrary instruction.
-        </p>
+        </CardDescription>
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -65,10 +71,10 @@ export default function TaskPage() {
           className="mt-4 flex flex-col gap-4"
         >
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="instruction">Instruction</Label>
+            <Label htmlFor="instruction">What should the participant accomplish?</Label>
             <Textarea
               id="instruction"
-              rows={2}
+              rows={3}
               required
               placeholder="Transfer ₹2,000 to a saved beneficiary."
               value={instruction}

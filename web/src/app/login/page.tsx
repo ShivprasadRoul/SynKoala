@@ -36,11 +36,16 @@ export default function LoginPage() {
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-canvas px-6">
-      <div className="w-full max-w-[380px]">
-        <h1 className="font-display text-[24px] font-extrabold tracking-[-0.5px] text-ink">
-          SynKoala Studio
-        </h1>
-        <p className="mt-1 text-[14px] text-ink-muted">
+      <div className="w-full max-w-[380px] rounded-lg border border-hairline bg-surface-card p-8 shadow-raised">
+        <div className="flex items-center gap-2">
+          <span className="flex h-7 w-7 items-center justify-center rounded-md bg-primary text-[14px] font-black text-on-primary">
+            S
+          </span>
+          <h1 className="font-display text-[20px] font-extrabold tracking-[-0.3px] text-ink">
+            SynKoala Studio
+          </h1>
+        </div>
+        <p className="mt-2 text-[14px] text-ink-muted">
           {mode === "sign-in" ? "Sign in to your research workspace." : "Create a workspace."}
         </p>
 

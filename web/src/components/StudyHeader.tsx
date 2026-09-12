@@ -1,0 +1,89 @@
+"use client";
+
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import Link from "next/link";
+
+import { Button } from "@/components/ui/Button";
+import { StatusBadge } from "@/components/ui/StatusBadge";
+import { getAudience } from "@/lib/api/audiences";
+import { updateStudy } from "@/lib/api/studies";
+import type { Study } from "@/lib/types";
+
+function relativeTime(iso: string): string {
+  const minutes = Math.round((Date.now() - new Date(iso).getTime()) / 60_000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
+}
+
+// The study's identity + lifecycle state, shown above the workflow stepper on
+// every tab. Publish lives here (not buried in the Overview tab) since it's a
+// study-wide action, gated on an audience segment existing — same rule as
+// before, just relocated per the redesign.
+export function StudyHeader({ study }: { study: Study }) {
+  const queryClient = useQueryClient();
+  const { data: audience } = useQuery({
+    queryKey: ["audience", study.id],
+    queryFn: () => getAudience(study.id),
+  });
+
+  const publish = useMutation({
+    mutationFn: () => updateStudy(study.id, { status: "READY" }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["study", study.id] }),
+  });
+
+  const canPublish = Boolean(audience);
+
+  return (
+    <div className="flex flex-col gap-4">
+      <Link
+        href="/dashboard"
+        className="inline-flex w-fit items-center gap-1.5 text-[13px] font-medium text-ink-muted transition-colors hover:text-ink"
+      >
+        <span aria-hidden>←</span> Studies
+      </Link>
+
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="font-display text-[26px] font-extrabold tracking-[-0.4px] text-ink">
+            {study.name}
+          </h1>
+          {study.objective && (
+            <p className="mt-1.5 max-w-[560px] text-[14px] text-ink-muted">{study.objective}</p>
+          )}
+          <div className="mt-3 flex flex-wrap items-center gap-2 text-[12px] text-ink-tertiary">
+            <StatusBadge status={study.status} />
+            <span>
+              {study.population_size ?? "No"} synthetic {study.population_size === 1 ? "user" : "users"}
+            </span>
+            <span aria-hidden>·</span>
+            <span>Last edited {relativeTime(study.updated_at)}</span>
+          </div>
+        </div>
+
+        {study.status === "DRAFT" && (
+          <div className="flex flex-col items-end gap-1.5">
+            <Button
+              disabled={publish.isPending || !canPublish}
+              title={canPublish ? undefined : "Add an audience segment before publishing this study"}
+              onClick={() => publish.mutate()}
+            >
+              {publish.isPending ? "Publishing…" : "Publish"}
+            </Button>
+            {!canPublish && (
+              <p className="text-[12px] text-ink-tertiary">Needs an audience segment</p>
+            )}
+          </div>
+        )}
+      </div>
+
+      {publish.isError && (
+        <p className="text-[13px] text-semantic-warn">
+          {publish.error instanceof Error ? publish.error.message : "Couldn't update the study"}
+        </p>
+      )}
+    </div>
+  );
+}

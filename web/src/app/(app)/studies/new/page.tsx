@@ -5,7 +5,8 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 import { Button } from "@/components/ui/Button";
-import { Input, Label, Textarea } from "@/components/ui/Input";
+import { Card, CardDescription, CardTitle } from "@/components/ui/Card";
+import { HelperText, Input, Label, Textarea } from "@/components/ui/Input";
 import { createStudy } from "@/lib/api/studies";
 
 export default function NewStudyPage() {
@@ -21,16 +22,17 @@ export default function NewStudyPage() {
   });
 
   return (
-    <div className="max-w-[560px]">
-      <h1 className="font-display text-[24px] font-extrabold tracking-[-0.3px] text-ink">
-        New study
-      </h1>
+    <Card className="max-w-[560px]">
+      <CardTitle>New study</CardTitle>
+      <CardDescription className="mt-1.5">
+        Studies bundle an audience, a critical task, and a stimulus into one testable unit.
+      </CardDescription>
       <form
         onSubmit={(e) => {
           e.preventDefault();
           mutation.mutate();
         }}
-        className="mt-8 flex flex-col gap-4"
+        className="mt-6 flex flex-col gap-4"
       >
         <div className="flex flex-col gap-1.5">
           <Label htmlFor="name">Name</Label>
@@ -62,11 +64,11 @@ export default function NewStudyPage() {
             value={populationSize}
             onChange={(e) => setPopulationSize(Number(e.target.value))}
           />
-          <p className="text-[12px] text-ink-tertiary">
+          <HelperText>
             Default population for this study&apos;s runs — used when generating the audience
             and when a run is started without its own size, e.g. auto-started from the mobile
             app after a defined-path walkthrough.
-          </p>
+          </HelperText>
         </div>
         {mutation.isError && (
           <p className="text-[13px] text-semantic-warn">
@@ -77,6 +79,6 @@ export default function NewStudyPage() {
           {mutation.isPending ? "Creating…" : "Create study"}
         </Button>
       </form>
-    </div>
+    </Card>
   );
 }

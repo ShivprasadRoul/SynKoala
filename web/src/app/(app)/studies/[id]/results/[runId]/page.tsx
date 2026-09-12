@@ -32,7 +32,10 @@ export default function ResultsPage() {
     <div className="flex flex-col gap-6">
       <Card className="flex items-center justify-between">
         <div>
-          <h2 className="font-display text-[16px] font-bold text-ink">Run {run.id}</h2>
+          <span className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-tertiary">
+            Simulation run
+          </span>
+          <h2 className="mt-1 font-mono text-[13px] tabular-nums text-ink-muted">{run.id}</h2>
           <p className="mt-1 font-mono text-[13px] tabular-nums text-ink-muted">
             population {run.population_size}
             {run.seed !== null && ` · seed ${run.seed}`}
