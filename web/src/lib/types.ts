@@ -59,11 +59,74 @@ export interface Audience {
   created_at: string;
 }
 
+// Mirrors app/services/persona_sampler.py:PersonaSampler.sample's return shape
+// exactly. Every numeric field is 0.0-1.0, sampled deterministically from the
+// audience's distribution (plus a formula over those same core traits for the
+// fields the audience doesn't define directly) — never from an LLM, so the
+// same seed always reproduces the same personas. Identity fields are cosmetic
+// flavor only; mental_model/goal are grounded in the study's real Task text
+// where one exists.
+export interface GeneratedPersona {
+  persona_id: string;
+  identity: {
+    name: string;
+    age: number;
+    occupation: string;
+    location: string;
+  };
+  context: {
+    digital_confidence: number;
+    product_familiarity: number;
+    domain_experience: number;
+    usage_frequency: string;
+    primary_device: string;
+  };
+  behavior: {
+    digital_confidence: number;
+    exploration: number;
+    patience: number;
+    goal_directedness: number;
+    decision_speed: number;
+    cta_recognition: number;
+    search_tendency: number;
+    backtracking_tendency: number;
+    error_recovery: number;
+    instruction_following: number;
+  };
+  mental_model: {
+    expected_action: string;
+    expected_location: string;
+    expected_terminology: string[];
+    navigation_expectation: string;
+  };
+  goal: {
+    primary_goal: string;
+    motivation: string;
+    urgency: number;
+    success_definition: string;
+  };
+  friction: {
+    confusion_threshold: number;
+    abandonment_threshold: number;
+    retry_probability: number;
+    alternative_path_probability: number;
+    help_seeking_probability: number;
+  };
+  ui_preferences: {
+    text_comprehension: number;
+    icon_reliance: number;
+    form_tolerance: number;
+    modal_tolerance: number;
+    scrolling_tolerance: number;
+    icon_only_cta_recognition: number;
+  };
+}
+
 export interface Participant {
   id: string;
   audience_id: string;
   traits: Record<string, unknown>;
-  persona: Record<string, unknown> | null;
+  persona: GeneratedPersona | null;
   seed: number | null;
   created_at: string;
 }

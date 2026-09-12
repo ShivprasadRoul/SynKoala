@@ -1,3 +1,4 @@
+import random
 import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -5,19 +6,26 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models import AudienceModel, ParticipantRecordModel, UserModel
 from app.services.audience_engine import AudienceEngine
 from app.services.audience_service import AudienceService
+from app.services.persona_sampler import PersonaSampler
 from app.services.study_service import StudyService
+from app.services.task_service import TaskService
 
 
 class AudienceUseCase:
     """Orchestration for the AudienceModel resource (planning/02-api.md). Composes
-    StudyService (ownership), AudienceEngine (pure statistics), and
-    AudienceService (persistence) — none of which call each other directly."""
+    StudyService (ownership), AudienceEngine (pure statistics), TaskService
+    (read-only, for the real task text a persona's mental model/goal are
+    grounded in), PersonaSampler (pure, deterministic persona construction),
+    and AudienceService (persistence) — none of which call each other
+    directly."""
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
         self._studies = StudyService(session)
         self._audiences = AudienceService(session)
+        self._tasks = TaskService(session)
         self._engine = AudienceEngine()
+        self._persona_sampler = PersonaSampler()
 
     async def create(
         self, user: UserModel, study_id: uuid.UUID, name: str, definition: dict
@@ -38,6 +46,35 @@ class AudienceUseCase:
         await self._studies.get_owned(user, study_id)
         audience = await self._audiences.get_latest_for_study(study_id)
         traits_list = self._engine.sample_participants(audience.prior, population_size, seed)
-        participants = await self._audiences.create_participants(audience.id, traits_list, seed)
+
+        tasks = await self._tasks.list_for_study(study_id)
+        task = (
+            {
+                "instruction": tasks[0].instruction,
+                "starting_point": tasks[0].starting_point,
+                "success_conditions": tasks[0].success_conditions,
+            }
+            if tasks
+            else None
+        )
+        # A second, independently-seeded RNG stream — persona identity/derived
+        # fields never need to share draws with AudienceEngine's own trait
+        # sampling, they just need to be reproducible on their own for the
+        # same seed (PRD §7).
+        persona_rng = random.Random(seed)
+        personas = [
+            self._persona_sampler.sample(
+                rng=persona_rng,
+                core_traits=core_traits,
+                definition=audience.definition,
+                index=index,
+                task=task,
+            )
+            for index, core_traits in enumerate(traits_list)
+        ]
+
+        participants = await self._audiences.create_participants(
+            audience.id, traits_list, seed, personas
+        )
         await self._session.commit()
         return participants

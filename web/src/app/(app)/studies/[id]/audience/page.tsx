@@ -4,13 +4,15 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams } from "next/navigation";
 import { useState } from "react";
 
+import { PersonaCard } from "@/components/persona/PersonaCard";
+import { PersonaDetailModal } from "@/components/persona/PersonaDetailModal";
 import { Button } from "@/components/ui/Button";
 import { Card, CardDescription, CardTitle } from "@/components/ui/Card";
 import { HelperText, Input, Label, Textarea } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { createAudience, generatePopulation, getAudience } from "@/lib/api/audiences";
 import { getStudy } from "@/lib/api/studies";
-import type { AudienceDefinition, Participant, TraitBand } from "@/lib/types";
+import type { AudienceDefinition, GeneratedPersona, Participant, TraitBand } from "@/lib/types";
 import { TRAIT_BANDS } from "@/lib/types";
 
 const TRAIT_BAND_LABELS: Record<TraitBand, string> = {
@@ -74,21 +76,6 @@ const AUDIENCE_CONTEXT_PRESETS = [
   exploration: TraitBand;
   patience: TraitBand;
 }>;
-
-// AudienceEngine samples continuous 0-1 trait values, not bands — this only
-// governs how a sampled participant's real traits are *displayed*, mirroring
-// the band thresholds the engine itself uses (app/services/audience_engine.py).
-function traitBandFromValue(value: number): string {
-  if (value < 0.4) return "Low";
-  if (value < 0.65) return "Medium";
-  return "High";
-}
-
-const TRAIT_DISPLAY_ORDER: [key: string, label: string][] = [
-  ["digital_confidence", "Digital confidence"],
-  ["exploration", "Exploration"],
-  ["patience", "Patience"],
-];
 
 function TraitBandSelect({
   id,
@@ -188,6 +175,7 @@ export default function AudiencePage() {
   const populationSize = populationSizeOverride ?? study?.population_size ?? 50;
   const [seed, setSeed] = useState<string>("");
   const [lastGenerated, setLastGenerated] = useState<Participant[] | null>(null);
+  const [viewingPersona, setViewingPersona] = useState<GeneratedPersona | null>(null);
 
   const generateMutation = useMutation({
     mutationFn: () =>
@@ -421,11 +409,11 @@ export default function AudiencePage() {
             Generated synthetic users
           </span>
         </div>
-        <CardTitle className="mt-1.5">Generate personas</CardTitle>
+        <CardTitle className="mt-1.5">Synthetic users</CardTitle>
         <CardDescription className="mt-1">
-          Samples individual synthetic participants from the audience&apos;s distribution.
-          Repeatable — each call adds more participants, it doesn&apos;t replace the existing
-          population.
+          SynKoala generates individual users from your audience — each one an independent sample
+          from its distribution, not a copy of it. Repeatable — each call adds more, it
+          doesn&apos;t replace the existing population.
         </CardDescription>
         <form
           onSubmit={(e) => {
@@ -470,42 +458,34 @@ export default function AudiencePage() {
         {lastGenerated && (
           <div className="mt-5 border-t border-hairline pt-4">
             <p className="font-mono text-[13px] tabular-nums text-ink">
-              +{lastGenerated.length} participants generated this session
+              +{lastGenerated.length} synthetic users generated this session
             </p>
             <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {lastGenerated.slice(0, 6).map((participant, index) => (
-                <div
-                  key={participant.id}
-                  className="rounded-md border border-hairline bg-surface-1/60 p-3.5"
-                >
-                  <p className="text-[13px] font-semibold text-ink">
-                    Participant {String(index + 1).padStart(2, "0")}
-                  </p>
-                  <dl className="mt-2 flex flex-col gap-1">
-                    {TRAIT_DISPLAY_ORDER.map(([key, label]) => {
-                      const value = participant.traits[key];
-                      if (typeof value !== "number") return null;
-                      return (
-                        <div key={key} className="flex items-center justify-between text-[12px]">
-                          <dt className="text-ink-tertiary">{label}</dt>
-                          <dd className="font-semibold text-ink-muted">
-                            {traitBandFromValue(value)}
-                          </dd>
-                        </div>
-                      );
-                    })}
-                  </dl>
-                </div>
-              ))}
+              {lastGenerated
+                .filter((participant): participant is Participant & { persona: GeneratedPersona } =>
+                  Boolean(participant.persona)
+                )
+                .slice(0, 9)
+                .map((participant) => (
+                  <PersonaCard
+                    key={participant.id}
+                    persona={participant.persona}
+                    onView={() => setViewingPersona(participant.persona)}
+                  />
+                ))}
             </div>
-            {lastGenerated.length > 6 && (
+            {lastGenerated.length > 9 && (
               <p className="mt-2 text-[12px] text-ink-tertiary">
-                +{lastGenerated.length - 6} more not shown
+                +{lastGenerated.length - 9} more not shown
               </p>
             )}
           </div>
         )}
       </Card>
+
+      {viewingPersona && (
+        <PersonaDetailModal persona={viewingPersona} onClose={() => setViewingPersona(null)} />
+      )}
     </div>
   );
 }

@@ -46,11 +46,18 @@ class AudienceService:
         return participant
 
     async def create_participants(
-        self, audience_id: uuid.UUID, traits_list: list[dict], seed: int | None
+        self,
+        audience_id: uuid.UUID,
+        traits_list: list[dict],
+        seed: int | None,
+        personas: list[dict] | None = None,
     ) -> list[ParticipantRecordModel]:
+        personas = personas or [None] * len(traits_list)
         participants = [
-            ParticipantRecordModel(audience_id=audience_id, traits=traits, seed=seed)
-            for traits in traits_list
+            ParticipantRecordModel(
+                audience_id=audience_id, traits=traits, persona=persona, seed=seed
+            )
+            for traits, persona in zip(traits_list, personas, strict=True)
         ]
         self._session.add_all(participants)
         await self._session.flush()
