@@ -62,11 +62,17 @@ class SimulationRunService:
         return run
 
     async def complete_participant_run(
-        self, participant_run: ParticipantRunModel, status: str, final_outcome: dict | None
+        self,
+        participant_run: ParticipantRunModel,
+        status: str,
+        final_outcome: dict | None,
+        current_screen_id: uuid.UUID | None = None,
     ) -> ParticipantRunModel:
         participant_run.status = status
         participant_run.final_outcome = final_outcome
         participant_run.completed_at = datetime.now(UTC)
+        if current_screen_id is not None:
+            participant_run.current_screen_id = current_screen_id
         await self._session.flush()
         return participant_run
 

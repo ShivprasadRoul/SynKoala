@@ -7,7 +7,7 @@ from sqlalchemy.orm import selectinload
 from app.core.errors import NotFoundError
 from app.core.settings import settings
 from app.core.storage import ensure_bucket, upload_object
-from app.db.models import ScreenModel, StimulusModel
+from app.db.models import ScreenModel, ScreenTransitionModel, StimulusModel
 
 
 class StimulusService:
@@ -74,3 +74,28 @@ class StimulusService:
         if stimulus is None:
             raise NotFoundError(f"Stimulus {stimulus_id} not found")
         return stimulus
+
+    async def get_latest_for_study(self, study_id: uuid.UUID) -> StimulusModel:
+        """The stimulus a simulation run should perceive (planning/07-simulation-engine.md)
+        — most recently created, screens/elements eager-loaded for the screen graph."""
+        stimulus = await self._session.scalar(
+            select(StimulusModel)
+            .where(StimulusModel.study_id == study_id)
+            .options(selectinload(StimulusModel.screens).selectinload(ScreenModel.elements))
+            .order_by(StimulusModel.created_at.desc())
+        )
+        if stimulus is None:
+            raise NotFoundError(f"No stimulus defined for study {study_id}")
+        return stimulus
+
+    async def list_transitions_for_stimulus(
+        self, stimulus_id: uuid.UUID
+    ) -> list[ScreenTransitionModel]:
+        """The screen graph's edges (LLD §7) — joined through `screens` since a
+        transition doesn't carry its own stimulus_id."""
+        result = await self._session.scalars(
+            select(ScreenTransitionModel)
+            .join(ScreenModel, ScreenTransitionModel.from_screen_id == ScreenModel.id)
+            .where(ScreenModel.stimulus_id == stimulus_id)
+        )
+        return list(result)
