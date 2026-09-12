@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+tests/
+mobile/
+web/
+.git/
+.env
+.env.*
+!.env.example
+planning/
+Synthetic_Koala_Architecture_Docs/
+*.egg-info/
