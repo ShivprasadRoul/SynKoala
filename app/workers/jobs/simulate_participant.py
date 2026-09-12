@@ -114,16 +114,16 @@ async def handle_simulate_participant(session: AsyncSession, payload: dict) -> N
     participant_run = await runs.get_participant_run(participant_run_id)
     participant_record = await audiences.get_participant(participant_id)
     task = await tasks.get_by_id(task_id)
-    stimulus = await stimuli.get_latest_for_study(study_id)
-    transitions = await stimuli.list_transitions_for_stimulus(stimulus.id)
+    screens = await stimuli.list_screens_for_study(study_id)
+    transitions = await stimuli.list_transitions_for_study(study_id)
 
-    if not stimulus.screens:
+    if not any(screen.elements for screen in screens):
         raise LifecycleError(
-            f"Stimulus {stimulus.id} for study {study_id} has no analyzed screens yet "
-            "(planning/05-stimulus-engine.md's VisionProvider hasn't run for it)"
+            f"Study {study_id} has no analyzed screens yet "
+            "(planning/05-stimulus-engine.md's VisionProvider hasn't run for its stimuli)"
         )
 
-    screen_graph = _screen_graph_from_orm(stimulus.screens, transitions)
+    screen_graph = _screen_graph_from_orm(screens, transitions)
     task_context = _task_context_from_orm(task)
     participant = ParticipantDraft(
         id=participant_record.id,

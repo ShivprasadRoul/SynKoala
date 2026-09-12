@@ -25,6 +25,12 @@ class Settings(BaseSettings):
     figma_redirect_uri: str | None = None
     figma_token_encryption_key: str | None = None
 
+    # Stimulus Engine's VisionProvider (planning/05-stimulus-engine.md) — a Pydantic AI
+    # model identifier (e.g. "anthropic:claude-haiku-4-5-20251001"); the actual provider
+    # API key is read by Pydantic AI itself from that provider's standard env var
+    # (e.g. ANTHROPIC_API_KEY), not from a setting here.
+    vision_model: str = "anthropic:claude-haiku-4-5-20251001"
+
     @cached_property
     def supabase_jwt_issuer(self) -> str:
         return f"{self.supabase_url}/auth/v1"
