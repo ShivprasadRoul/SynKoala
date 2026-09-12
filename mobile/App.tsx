@@ -1,18 +1,21 @@
-import { useState } from "react";
-import { SafeAreaView, StatusBar, StyleSheet } from "react-native";
+import { useEffect, useState } from "react";
+import { ActivityIndicator, SafeAreaView, StatusBar, StyleSheet, View } from "react-native";
 
 import { CreatorLoginScreen } from "./src/screens/CreatorLoginScreen";
 import { CreatorPickerScreen } from "./src/screens/CreatorPickerScreen";
 import { DefinedPathCaptureScreen } from "./src/screens/DefinedPathCaptureScreen";
 import { DoneScreen } from "./src/screens/DoneScreen";
 import { HomeScreen } from "./src/screens/HomeScreen";
+import { SettingsScreen } from "./src/screens/SettingsScreen";
 import { StartTesterSessionScreen } from "./src/screens/StartTesterSessionScreen";
 import { TesterCaptureScreen } from "./src/screens/TesterCaptureScreen";
 import { TesterEntryScreen } from "./src/screens/TesterEntryScreen";
+import { getApiBaseUrl, loadSettings } from "./src/settings";
 import type { Study, Task } from "./src/types";
 
 type AppScreen =
   | { name: "home" }
+  | { name: "settings" }
   | { name: "creator-login" }
   | { name: "creator-picker"; token: string }
   | { name: "defined-path"; token: string; study: Study; task: Task }
@@ -32,6 +35,21 @@ type AppScreen =
 // (planning/13-journey-capture.md: least dev-environment overhead).
 export default function App() {
   const [screen, setScreen] = useState<AppScreen>({ name: "home" });
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    loadSettings().then(() => setReady(true));
+  }, []);
+
+  if (!ready) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <View style={styles.loading}>
+          <ActivityIndicator />
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   let content;
   switch (screen.name) {
@@ -40,8 +58,13 @@ export default function App() {
         <HomeScreen
           onSelectCreator={() => setScreen({ name: "creator-login" })}
           onSelectTester={() => setScreen({ name: "tester-entry" })}
+          onOpenSettings={() => setScreen({ name: "settings" })}
+          apiBaseUrl={getApiBaseUrl()}
         />
       );
+      break;
+    case "settings":
+      content = <SettingsScreen onDone={() => setScreen({ name: "home" })} />;
       break;
     case "creator-login":
       content = (
@@ -118,4 +141,5 @@ export default function App() {
 
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: "#fff" },
+  loading: { flex: 1, justifyContent: "center", alignItems: "center" },
 });

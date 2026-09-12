@@ -1,5 +1,5 @@
-import { useMemo, useRef, useState } from "react";
-import { StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Animated, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { WebView, type WebViewMessageEvent } from "react-native-webview";
 
 import type { CapturedAction } from "../types";
@@ -44,6 +44,22 @@ export function FigmaCaptureView({ figmaUrl, onStep }: Props) {
   const lastStepAt = useRef(Date.now());
   const [pendingNodeId, setPendingNodeId] = useState("");
 
+  // A pulsing red border + badge around the prototype view — the visible
+  // signal that a capture session is actively recording, for as long as this
+  // component is mounted (both the creator's buffered walkthrough and a
+  // tester's live session render it only while capturing is in progress).
+  const pulse = useRef(new Animated.Value(1)).current;
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, { toValue: 0.35, duration: 700, useNativeDriver: true }),
+        Animated.timing(pulse, { toValue: 1, duration: 700, useNativeDriver: true }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [pulse]);
+
   function logStep(action: CapturedAction, nodeIdOverride?: string) {
     const now = Date.now();
     const durationMs = now - lastStepAt.current;
@@ -69,12 +85,21 @@ export function FigmaCaptureView({ figmaUrl, onStep }: Props) {
 
   return (
     <View style={styles.container}>
-      <WebView
-        source={{ html }}
-        onMessage={handleMessage}
-        javaScriptEnabled
-        style={styles.webview}
-      />
+      <View style={styles.webviewWrapper}>
+        <WebView
+          source={{ html }}
+          onMessage={handleMessage}
+          javaScriptEnabled
+          style={styles.webview}
+        />
+        <Animated.View
+          pointerEvents="none"
+          style={[styles.recordingBorder, { opacity: pulse }]}
+        />
+        <View pointerEvents="none" style={styles.recordingBadge}>
+          <Text style={styles.recordingBadgeText}>● Capturing</Text>
+        </View>
+      </View>
       <View style={styles.controls}>
         <TextInput
           style={styles.input}
@@ -101,7 +126,27 @@ export function FigmaCaptureView({ figmaUrl, onStep }: Props) {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
+  webviewWrapper: { flex: 1, position: "relative" },
   webview: { flex: 1 },
+  recordingBorder: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    borderWidth: 4,
+    borderColor: "#dc2626",
+  },
+  recordingBadge: {
+    position: "absolute",
+    top: 10,
+    left: 10,
+    backgroundColor: "#dc2626",
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+  },
+  recordingBadgeText: { color: "#fff", fontSize: 12, fontWeight: "700" },
   controls: { padding: 12, borderTopWidth: 1, borderTopColor: "#ddd", gap: 8 },
   input: { borderWidth: 1, borderColor: "#ccc", borderRadius: 8, padding: 8 },
   buttonRow: { flexDirection: "row", gap: 8 },

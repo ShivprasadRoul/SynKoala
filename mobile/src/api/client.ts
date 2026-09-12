@@ -1,4 +1,4 @@
-import { API_BASE_URL } from "../config";
+import { getApiBaseUrl } from "../settings";
 
 export type Auth =
   | { kind: "bearer"; token: string }
@@ -24,7 +24,7 @@ export async function apiFetch<T>(path: string, auth: Auth, options: FetchOption
     body = JSON.stringify(options.body);
   }
 
-  const response = await fetch(`${API_BASE_URL}/api/v1${path}`, {
+  const response = await fetch(`${getApiBaseUrl()}/api/v1${path}`, {
     method: options.method ?? (body ? "POST" : "GET"),
     headers,
     body,

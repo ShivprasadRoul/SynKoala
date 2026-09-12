@@ -24,8 +24,14 @@ npx expo start --android
 ```
 
 `EXPO_PUBLIC_API_BASE_URL` should point at a running instance of this repo's backend
-(`uv run uvicorn app.main:app --reload` from the repo root) — use your machine's LAN IP, not
-`localhost`, when testing on a physical device or a non-host emulator.
+(`uv run uvicorn app.main:app --reload --host 0.0.0.0` from the repo root — the `--host 0.0.0.0`
+matters, the default only listens on `localhost`) — use your machine's LAN IP, not `localhost`,
+when testing on a physical device or a non-host emulator.
+
+That env var only sets the *default* the app ships with at build time. Once installed, the
+backend address is also editable at runtime from Home → "Backend: ... (tap to change)"
+(`src/screens/SettingsScreen.tsx`, persisted via `src/settings.ts`) — this is what lets one
+built APK be pointed at whichever machine is running the backend, without a rebuild.
 
 ## Architecture
 

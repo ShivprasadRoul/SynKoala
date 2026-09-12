@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { ActivityIndicator, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 
-import { supabase } from "../api/supabase";
+import { getSupabaseClient } from "../api/supabase";
 
 interface Props {
   onLoggedIn: (accessToken: string) => void;
@@ -18,7 +18,7 @@ export function CreatorLoginScreen({ onLoggedIn, onCancel }: Props) {
     setError(null);
     setLoading(true);
     try {
-      const { data, error: signInError } = await supabase.auth.signInWithPassword({
+      const { data, error: signInError } = await getSupabaseClient().auth.signInWithPassword({
         email,
         password,
       });
