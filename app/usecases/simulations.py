@@ -3,6 +3,7 @@ import uuid
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.graphs.simulation_graph import has_recognized_success_condition
+from app.agents.types import ScreenGraph
 from app.core.errors import LifecycleError, NotFoundError
 from app.db.models import ParticipantRecordModel, SimulationRunModel, TaskModel, UserModel
 from app.services.audience_service import AudienceService
@@ -55,6 +56,34 @@ class SimulationUseCase:
         if not tasks:
             raise LifecycleError(f"Study {study_id} has no task defined")
         raise LifecycleError(f"Study {study_id} has multiple tasks — specify task_id")
+
+    def _verify_screen_keys_exist(self, task: TaskModel, screen_graph: ScreenGraph) -> None:
+        """`task.starting_point` and `success_conditions.screen_key` are
+        free-text — nothing stops them from naming a screen that doesn't
+        exist (a paraphrase like "Signup Page" instead of the vision model's
+        own `create_new_account`). `resolve_starting_screen` silently falls
+        back to an arbitrary screen on a miss, and `_success_condition_met`
+        silently never matches — so a typo like this doesn't error, it just
+        starts every participant on the wrong screen and makes the task
+        uncompletable, which reads exactly like a UX/product finding rather
+        than what it actually is: a config typo. Reproduced directly: a task
+        with `starting_point="Signup Page"` and `success_conditions=
+        {"screen_key": "Complete page"}` against a study whose real screens
+        are `create_new_account`/`account_created_go_to_log_in` etc. — every
+        participant piled up dead-end clicks on one arbitrary starting screen
+        for the entire run."""
+        real_keys = {screen.screen_key for screen in screen_graph.screens.values()}
+        if task.starting_point and task.starting_point not in real_keys:
+            raise LifecycleError(
+                f"Task {task.id}'s starting_point {task.starting_point!r} doesn't match "
+                f"any analyzed screen — real screen keys are: {sorted(real_keys)}"
+            )
+        success_screen_key = (task.success_conditions or {}).get("screen_key")
+        if success_screen_key and success_screen_key not in real_keys:
+            raise LifecycleError(
+                f"Task {task.id}'s success_conditions.screen_key {success_screen_key!r} doesn't "
+                f"match any analyzed screen — real screen keys are: {sorted(real_keys)}"
+            )
 
     async def _resolve_participants(self, study_id: uuid.UUID) -> list[ParticipantRecordModel]:
         audience = await self._audiences.get_latest_for_study(study_id)
@@ -114,6 +143,8 @@ class SimulationUseCase:
                 "(screen_key, element_key or semantic_role) or "
                 "expected_critical_actions, otherwise no participant can complete it"
             )
+        screen_graph = await self._stimuli.get_screen_graph(study_id)
+        self._verify_screen_keys_exist(task, screen_graph)
         participants = await self._resolve_participants(study_id)
         if population_size > len(participants):
             raise LifecycleError(

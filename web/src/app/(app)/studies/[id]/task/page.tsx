@@ -37,7 +37,10 @@ const SUCCESS_KEYS = [
 
 type SuccessKey = (typeof SUCCESS_KEYS)[number]["value"];
 
-function parseSuccessConditions(key: SuccessKey, raw: string): Record<string, string> | null {
+function parseSuccessConditions(
+  key: SuccessKey,
+  raw: string,
+): Record<string, string> | null {
   const value = raw.trim();
   return value ? { [key]: value } : null;
 }
@@ -70,12 +73,38 @@ function detectedFlowScreens(stimuli: Stimulus[] | undefined): {
   return { entry, success };
 }
 
-function TaskEditForm({ task, onDone }: { task: Task; onDone: () => void }) {
+// Every analyzed screen's real key — the only values `starting_point` and a
+// `screen_key` success condition can honestly reference. Free-text here is
+// what let a task point at "Signup Page"/"Complete page" that don't match
+// any real screen (a paraphrase of the vision model's own snake_case key):
+// resolve_starting_screen silently falls back to an arbitrary screen and the
+// success condition silently never matches, so the mismatch never surfaces
+// as an error — it just produces a run that can't complete. A dropdown of
+// real keys makes that typo impossible to enter in the first place.
+function analyzedScreenKeys(stimuli: Stimulus[] | undefined): string[] {
+  const keys = new Set<string>();
+  for (const stimulus of stimuli ?? []) {
+    for (const screen of stimulus.screens ?? []) {
+      if (screen.elements.length > 0) keys.add(screen.screen_key);
+    }
+  }
+  return [...keys].sort();
+}
+
+function TaskEditForm({
+  task,
+  screenKeys,
+  onDone,
+}: {
+  task: Task;
+  screenKeys: string[];
+  onDone: () => void;
+}) {
   const queryClient = useQueryClient();
   const [instruction, setInstruction] = useState(task.instruction);
   const [startingPoint, setStartingPoint] = useState(task.starting_point ?? "");
   const [criticalActions, setCriticalActions] = useState(
-    (task.expected_critical_actions ?? []).join(", ")
+    (task.expected_critical_actions ?? []).join(", "),
   );
   const existingSuccess = readSuccessConditions(task);
   const [successKey, setSuccessKey] = useState<SuccessKey>(existingSuccess.key);
@@ -103,12 +132,22 @@ function TaskEditForm({ task, onDone }: { task: Task; onDone: () => void }) {
       }}
       className="flex flex-col gap-3"
     >
-      <Textarea rows={2} value={instruction} onChange={(e) => setInstruction(e.target.value)} />
-      <Input
-        placeholder="Starting point (optional)"
+      <Textarea
+        rows={2}
+        value={instruction}
+        onChange={(e) => setInstruction(e.target.value)}
+      />
+      <Select
         value={startingPoint}
         onChange={(e) => setStartingPoint(e.target.value)}
-      />
+      >
+        <option value="">No starting point (optional)</option>
+        {screenKeys.map((key) => (
+          <option key={key} value={key}>
+            {key}
+          </option>
+        ))}
+      </Select>
       <div className="flex gap-2">
         <Select
           className="w-auto"
@@ -121,11 +160,25 @@ function TaskEditForm({ task, onDone }: { task: Task; onDone: () => void }) {
             </option>
           ))}
         </Select>
-        <Input
-          placeholder="Task is done when… (e.g. dashboard)"
-          value={successValue}
-          onChange={(e) => setSuccessValue(e.target.value)}
-        />
+        {successKey === "screen_key" ? (
+          <Select
+            value={successValue}
+            onChange={(e) => setSuccessValue(e.target.value)}
+          >
+            <option value="">Select a screen</option>
+            {screenKeys.map((key) => (
+              <option key={key} value={key}>
+                {key}
+              </option>
+            ))}
+          </Select>
+        ) : (
+          <Input
+            placeholder="Task is done when… (e.g. dashboard)"
+            value={successValue}
+            onChange={(e) => setSuccessValue(e.target.value)}
+          />
+        )}
       </div>
       <Input
         placeholder="Critical actions, comma-separated (e.g. add_to_cart)"
@@ -134,7 +187,9 @@ function TaskEditForm({ task, onDone }: { task: Task; onDone: () => void }) {
       />
       {editMutation.isError && (
         <p className="text-[13px] text-semantic-warn">
-          {editMutation.error instanceof Error ? editMutation.error.message : "Failed to save"}
+          {editMutation.error instanceof Error
+            ? editMutation.error.message
+            : "Failed to save"}
         </p>
       )}
       <div className="flex gap-2">
@@ -169,6 +224,7 @@ export default function TaskPage() {
     queryFn: () => listStimuli(studyId),
   });
   const detected = detectedFlowScreens(stimuli);
+  const screenKeys = analyzedScreenKeys(stimuli);
 
   const createMutation = useMutation({
     mutationFn: () =>
@@ -202,7 +258,9 @@ export default function TaskPage() {
   const [completionRate, setCompletionRate] = useState("");
   const [sampleSize, setSampleSize] = useState("");
   const [extraJson, setExtraJson] = useState("");
-  const [benchmarkJsonError, setBenchmarkJsonError] = useState<string | null>(null);
+  const [benchmarkJsonError, setBenchmarkJsonError] = useState<string | null>(
+    null,
+  );
 
   const benchmarkMutation = useMutation({
     mutationFn: () => {
@@ -217,22 +275,31 @@ export default function TaskPage() {
       return uploadBenchmark(studyId, {
         source: benchmarkSource || null,
         task_outcomes: {
-          ...(completionRate ? { completion_rate: Number(completionRate) } : {}),
+          ...(completionRate
+            ? { completion_rate: Number(completionRate) }
+            : {}),
           ...(sampleSize ? { sample_size: Number(sampleSize) } : {}),
         },
-        interaction_rates: extra.interaction_rates as Record<string, unknown> | undefined,
-        segment_labels: extra.segment_labels as Record<string, unknown> | undefined,
-        attention_data: extra.attention_data as Record<string, unknown> | undefined,
+        interaction_rates: extra.interaction_rates as
+          Record<string, unknown> | undefined,
+        segment_labels: extra.segment_labels as
+          Record<string, unknown> | undefined,
+        attention_data: extra.attention_data as
+          Record<string, unknown> | undefined,
       });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["benchmark", studyId] });
       setBenchmarkJsonError(null);
     },
-    onError: (err) => setBenchmarkJsonError(err instanceof Error ? err.message : "Upload failed"),
+    onError: (err) =>
+      setBenchmarkJsonError(
+        err instanceof Error ? err.message : "Upload failed",
+      ),
   });
 
-  if (isLoading) return <p className="text-[14px] text-ink-muted">Loading tasks…</p>;
+  if (isLoading)
+    return <p className="text-[14px] text-ink-muted">Loading tasks…</p>;
 
   return (
     <div className="flex flex-col gap-6">
@@ -242,7 +309,11 @@ export default function TaskPage() {
             {tasks.map((task) =>
               editingTaskId === task.id ? (
                 <Card key={task.id}>
-                  <TaskEditForm task={task} onDone={() => setEditingTaskId(null)} />
+                  <TaskEditForm
+                    task={task}
+                    screenKeys={screenKeys}
+                    onDone={() => setEditingTaskId(null)}
+                  />
                 </Card>
               ) : (
                 <Card key={task.id}>
@@ -251,7 +322,9 @@ export default function TaskPage() {
                       <span className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-tertiary">
                         Goal
                       </span>
-                      <p className="mt-1.5 text-[15px] font-medium text-ink">{task.instruction}</p>
+                      <p className="mt-1.5 text-[15px] font-medium text-ink">
+                        {task.instruction}
+                      </p>
                     </div>
                     <button
                       type="button"
@@ -266,7 +339,9 @@ export default function TaskPage() {
                       <span className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-tertiary">
                         Starting point
                       </span>
-                      <p className="mt-1 text-[13px] text-ink-muted">{task.starting_point}</p>
+                      <p className="mt-1 text-[13px] text-ink-muted">
+                        {task.starting_point}
+                      </p>
                     </div>
                   )}
                   <div className="mt-3 border-t border-hairline pt-3">
@@ -275,27 +350,29 @@ export default function TaskPage() {
                     </span>
                     {readSuccessConditions(task).value ? (
                       <p className="mt-1 font-mono text-[13px] text-ink-muted">
-                        {readSuccessConditions(task).key} = {readSuccessConditions(task).value}
+                        {readSuccessConditions(task).key} ={" "}
+                        {readSuccessConditions(task).value}
                       </p>
                     ) : (
                       <p className="mt-1 text-[13px] text-semantic-warn">
-                        Not set — simulations for this task will be rejected unless critical actions
-                        are defined.
+                        Not set — simulations for this task will be rejected
+                        unless critical actions are defined.
                       </p>
                     )}
                   </div>
-                  {task.expected_critical_actions && task.expected_critical_actions.length > 0 && (
-                    <div className="mt-3 border-t border-hairline pt-3">
-                      <span className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-tertiary">
-                        Critical actions
-                      </span>
-                      <p className="mt-1 font-mono text-[13px] text-ink-muted">
-                        {task.expected_critical_actions.join(", ")}
-                      </p>
-                    </div>
-                  )}
+                  {task.expected_critical_actions &&
+                    task.expected_critical_actions.length > 0 && (
+                      <div className="mt-3 border-t border-hairline pt-3">
+                        <span className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-tertiary">
+                          Critical actions
+                        </span>
+                        <p className="mt-1 font-mono text-[13px] text-ink-muted">
+                          {task.expected_critical_actions.join(", ")}
+                        </p>
+                      </div>
+                    )}
                 </Card>
-              )
+              ),
             )}
           </div>
         )}
@@ -304,128 +381,175 @@ export default function TaskPage() {
         still supports several (a later A/B-across-tasks flow would need it),
         but the study builder only ever shows a single task's worth of setup. */}
         {(!tasks || tasks.length === 0) && (
-        <Card className="flex-1">
-          <CardTitle>Define the critical user task</CardTitle>
-          <CardDescription className="mt-2">
-            The business-relevant journey a participant attempts — e.g. &quot;add a running shoe
-            under ₹5,000 to cart&quot;, not an arbitrary instruction.
-          </CardDescription>
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              createMutation.mutate();
-            }}
-            className="mt-4 flex flex-col gap-4"
-          >
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="instruction">What should the participant accomplish?</Label>
-              <Textarea
-                id="instruction"
-                rows={3}
-                required
-                placeholder="Transfer ₹2,000 to a saved beneficiary."
-                value={instruction}
-                onChange={(e) => setInstruction(e.target.value)}
-              />
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="starting-point">Starting point (optional)</Label>
-              <Input
-                id="starting-point"
-                placeholder="home_screen"
-                value={startingPoint}
-                onChange={(e) => setStartingPoint(e.target.value)}
-              />
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="success-value">Success condition</Label>
-              <div className="flex gap-2">
+          <Card className="flex-1">
+            <CardTitle>Define the critical user task</CardTitle>
+            <CardDescription className="mt-2">
+              The business-relevant journey a participant attempts — e.g.
+              &quot;add a running shoe under ₹5,000 to cart&quot;, not an
+              arbitrary instruction.
+            </CardDescription>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                createMutation.mutate();
+              }}
+              className="mt-4 flex flex-col gap-4"
+            >
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="instruction">
+                  What should the participant accomplish?
+                </Label>
+                <Textarea
+                  id="instruction"
+                  rows={3}
+                  required
+                  placeholder="Transfer ₹2,000 to a saved beneficiary."
+                  value={instruction}
+                  onChange={(e) => setInstruction(e.target.value)}
+                />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="starting-point">
+                  Starting point (optional)
+                </Label>
                 <Select
-                  className="w-auto"
-                  aria-label="Success condition type"
-                  value={successKey}
-                  onChange={(e) => setSuccessKey(e.target.value as SuccessKey)}
+                  id="starting-point"
+                  value={startingPoint}
+                  onChange={(e) => setStartingPoint(e.target.value)}
                 >
-                  {SUCCESS_KEYS.map((key) => (
-                    <option key={key.value} value={key.value}>
-                      {key.label}
+                  <option value="">No starting point</option>
+                  {screenKeys.map((key) => (
+                    <option key={key} value={key}>
+                      {key}
                     </option>
                   ))}
                 </Select>
-                <Input
-                  id="success-value"
-                  placeholder="dashboard"
-                  value={successValue}
-                  onChange={(e) => setSuccessValue(e.target.value)}
-                />
+                {screenKeys.length === 0 && (
+                  <p className="text-[12px] text-ink-tertiary">
+                    Import and analyze your stimulus first to pick a real screen
+                    here.
+                  </p>
+                )}
               </div>
-              {(detected.entry || detected.success) && (
-                <div className="flex flex-wrap items-center gap-2 rounded-md bg-surface-subtle px-3 py-2">
-                  <span className="text-[12px] text-ink-muted">
-                    Detected from your screens:{" "}
-                    {detected.entry && (
-                      <span className="font-mono">start {detected.entry}</span>
-                    )}
-                    {detected.entry && detected.success && " · "}
-                    {detected.success && (
-                      <span className="font-mono">finish {detected.success}</span>
-                    )}
-                  </span>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    onClick={() => {
-                      if (detected.entry) setStartingPoint(detected.entry);
-                      if (detected.success) {
-                        setSuccessKey("screen_key");
-                        setSuccessValue(detected.success);
-                      }
-                    }}
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="success-value">Success condition</Label>
+                <div className="flex gap-2">
+                  <Select
+                    className="w-auto"
+                    aria-label="Success condition type"
+                    value={successKey}
+                    onChange={(e) =>
+                      setSuccessKey(e.target.value as SuccessKey)
+                    }
                   >
-                    Use these
-                  </Button>
+                    {SUCCESS_KEYS.map((key) => (
+                      <option key={key.value} value={key.value}>
+                        {key.label}
+                      </option>
+                    ))}
+                  </Select>
+                  {successKey === "screen_key" ? (
+                    <Select
+                      id="success-value"
+                      value={successValue}
+                      onChange={(e) => setSuccessValue(e.target.value)}
+                    >
+                      <option value="">Select a screen</option>
+                      {screenKeys.map((key) => (
+                        <option key={key} value={key}>
+                          {key}
+                        </option>
+                      ))}
+                    </Select>
+                  ) : (
+                    <Input
+                      id="success-value"
+                      placeholder="dashboard"
+                      value={successValue}
+                      onChange={(e) => setSuccessValue(e.target.value)}
+                    />
+                  )}
                 </div>
+                {(detected.entry || detected.success) && (
+                  <div className="flex flex-wrap items-center gap-2 rounded-md bg-surface-subtle px-3 py-2">
+                    <span className="text-[12px] text-ink-muted">
+                      Detected from your screens:{" "}
+                      {detected.entry && (
+                        <span className="font-mono">
+                          start {detected.entry}
+                        </span>
+                      )}
+                      {detected.entry && detected.success && " · "}
+                      {detected.success && (
+                        <span className="font-mono">
+                          finish {detected.success}
+                        </span>
+                      )}
+                    </span>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      onClick={() => {
+                        if (detected.entry) setStartingPoint(detected.entry);
+                        if (detected.success) {
+                          setSuccessKey("screen_key");
+                          setSuccessValue(detected.success);
+                        }
+                      }}
+                    >
+                      Use these
+                    </Button>
+                  </div>
+                )}
+                <p className="text-[12px] text-ink-tertiary">
+                  The task&apos;s finish line — reaching it is the only thing
+                  that marks a synthetic participant COMPLETED. Without this (or
+                  critical actions below) a run can only ever end in 100%
+                  drop-off, so starting one is rejected.
+                </p>
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="critical-actions">
+                  Critical actions (optional)
+                </Label>
+                <Input
+                  id="critical-actions"
+                  placeholder="add_to_cart, checkout_button"
+                  value={criticalActions}
+                  onChange={(e) => setCriticalActions(e.target.value)}
+                />
+                <p className="text-[12px] text-ink-tertiary">
+                  Milestones on the way to the finish line — used by the
+                  Analytics Engine&apos;s excess-actions/excess-screens friction
+                  metrics.
+                </p>
+              </div>
+              {createMutation.isError && (
+                <p className="text-[13px] text-semantic-warn">
+                  {createMutation.error instanceof Error
+                    ? createMutation.error.message
+                    : "Failed to create task"}
+                </p>
               )}
-              <p className="text-[12px] text-ink-tertiary">
-                The task&apos;s finish line — reaching it is the only thing that marks a synthetic
-                participant COMPLETED. Without this (or critical actions below) a run can only ever
-                end in 100% drop-off, so starting one is rejected.
-              </p>
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="critical-actions">Critical actions (optional)</Label>
-              <Input
-                id="critical-actions"
-                placeholder="add_to_cart, checkout_button"
-                value={criticalActions}
-                onChange={(e) => setCriticalActions(e.target.value)}
-              />
-              <p className="text-[12px] text-ink-tertiary">
-                Milestones on the way to the finish line — used by the Analytics Engine&apos;s
-                excess-actions/excess-screens friction metrics.
-              </p>
-            </div>
-            {createMutation.isError && (
-              <p className="text-[13px] text-semantic-warn">
-                {createMutation.error instanceof Error
-                  ? createMutation.error.message
-                  : "Failed to create task"}
-              </p>
-            )}
-            <Button type="submit" disabled={createMutation.isPending} className="self-start">
-              {createMutation.isPending ? "Saving…" : "Save task"}
-            </Button>
-          </form>
-        </Card>
+              <Button
+                type="submit"
+                disabled={createMutation.isPending}
+                className="self-start"
+              >
+                {createMutation.isPending ? "Saving…" : "Save task"}
+              </Button>
+            </form>
+          </Card>
         )}
       </div>
 
       <Card>
         <CardTitle>Human benchmark (optional)</CardTitle>
         <CardDescription className="mt-2">
-          Real human task-outcome data for the same task — lets the Validation Engine report how
-          closely the synthetic population&apos;s completion rate agrees with actual humans,
-          instead of a bare, unbenchmarked number.
+          Real human task-outcome data for the same task — lets the Validation
+          Engine report how closely the synthetic population&apos;s completion
+          rate agrees with actual humans, instead of a bare, unbenchmarked
+          number.
         </CardDescription>
         {benchmark && (
           <p className="mt-2 text-[12px] text-ink-tertiary">
@@ -454,7 +578,9 @@ export default function TaskPage() {
               />
             </div>
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="benchmark-completion-rate">Human completion rate</Label>
+              <Label htmlFor="benchmark-completion-rate">
+                Human completion rate
+              </Label>
               <Input
                 id="benchmark-completion-rate"
                 type="number"
@@ -481,7 +607,8 @@ export default function TaskPage() {
 
           <details className="group rounded-md border border-hairline bg-surface-1/50 p-4">
             <summary className="cursor-pointer text-[13px] font-semibold text-ink-subtle">
-              Advanced: interaction rates / segment labels / attention data (raw JSON)
+              Advanced: interaction rates / segment labels / attention data (raw
+              JSON)
             </summary>
             <div className="mt-3 flex flex-col gap-1.5">
               <Textarea
@@ -496,7 +623,9 @@ export default function TaskPage() {
           </details>
 
           {benchmarkJsonError && (
-            <p className="text-[13px] text-semantic-warn">{benchmarkJsonError}</p>
+            <p className="text-[13px] text-semantic-warn">
+              {benchmarkJsonError}
+            </p>
           )}
           <Button
             type="submit"

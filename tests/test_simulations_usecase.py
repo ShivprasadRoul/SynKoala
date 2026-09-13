@@ -3,6 +3,7 @@ from unittest.mock import ANY, AsyncMock, Mock
 
 import pytest
 
+from app.agents.types import ScreenGraph, ScreenView
 from app.core.errors import LifecycleError
 from app.db.models import ParticipantRecordModel, StudyModel, TaskModel
 from app.usecases.simulations import SimulationUseCase
@@ -17,11 +18,25 @@ def _ready_study(status: str = "READY") -> StudyModel:
     return StudyModel(id=uuid.uuid4(), project_id=uuid.uuid4(), name="Study", status=status)
 
 
+def _screen_graph_with(*screen_keys: str) -> ScreenGraph:
+    screens = {}
+    for key in screen_keys:
+        screen_id = uuid.uuid4()
+        screens[screen_id] = ScreenView(
+            id=screen_id, screen_key=key, width=None, height=None, elements=[]
+        )
+    return ScreenGraph(screens=screens, transitions=[])
+
+
 def _use_case_with_ready_study(study: StudyModel) -> SimulationUseCase:
     use_case = SimulationUseCase(_NoOpSession())
     use_case._studies = AsyncMock()
     use_case._studies.get_owned.return_value = study
     use_case._stimuli = AsyncMock()
+    # Empty by default — fine for tests whose task sets neither starting_point
+    # nor success_conditions.screen_key, so _verify_screen_keys_exist has
+    # nothing to check against real screens.
+    use_case._stimuli.get_screen_graph.return_value = _screen_graph_with()
     use_case._tasks = AsyncMock()
     use_case._audiences = AsyncMock()
     use_case._runs = AsyncMock()
@@ -49,6 +64,7 @@ def _wire_for_a_runnable_study(use_case: SimulationUseCase, study: StudyModel) -
     task = _completable_task(study.id)
     participant = ParticipantRecordModel(id=uuid.uuid4(), audience_id=uuid.uuid4(), traits={})
     use_case._stimuli.has_analyzed_screens.return_value = True
+    use_case._stimuli.get_screen_graph.return_value = _screen_graph_with("done_screen")
     use_case._tasks.list_for_study.return_value = [task]
     use_case._audiences.get_latest_for_study.return_value = Mock(id=uuid.uuid4())
     use_case._audiences.list_participants.return_value = [participant] * 100
@@ -83,6 +99,7 @@ async def test_create_run_proceeds_once_stimulus_is_analyzed():
 
     use_case = _use_case_with_ready_study(study)
     use_case._stimuli.has_analyzed_screens.return_value = True
+    use_case._stimuli.get_screen_graph.return_value = _screen_graph_with("done_screen")
     use_case._tasks.list_for_study.return_value = [task]
     use_case._audiences.get_latest_for_study.return_value = Mock(id=uuid.uuid4())
     use_case._audiences.list_participants.return_value = [participant]
@@ -120,6 +137,7 @@ async def test_create_run_allows_a_second_run_once_the_study_has_already_run_one
 
     use_case = _use_case_with_ready_study(study)
     use_case._stimuli.has_analyzed_screens.return_value = True
+    use_case._stimuli.get_screen_graph.return_value = _screen_graph_with("done_screen")
     use_case._tasks.list_for_study.return_value = [task]
     use_case._audiences.get_latest_for_study.return_value = Mock(id=uuid.uuid4())
     use_case._audiences.list_participants.return_value = [participant]
@@ -420,6 +438,87 @@ async def test_create_run_allows_a_new_run_once_the_prior_one_is_terminal(termin
     _wire_for_a_runnable_study(use_case, study)
     prior_run = Mock(id=uuid.uuid4(), status=terminal_status)
     use_case._runs.list_by_study.return_value = [prior_run]
+
+    await use_case.create_run(
+        user=Mock(), study_id=study.id, population_size=1, task_id=None, config=None, seed=None
+    )
+
+    use_case._runs.create_run.assert_awaited_once()
+
+
+# --- starting_point/success_conditions.screen_key must match a real screen ---
+
+
+async def test_create_run_rejects_a_starting_point_that_matches_no_real_screen():
+    """Reproduced live: a task's starting_point ("Signup Page") didn't match
+    any real screen_key (the vision model's own "create_new_account" etc.) —
+    resolve_starting_screen silently falls back to an arbitrary screen instead
+    of erroring, so every participant started somewhere the researcher never
+    intended and the run looked like a UX finding instead of a config typo."""
+    study = _ready_study()
+    task = TaskModel(
+        id=uuid.uuid4(),
+        study_id=study.id,
+        instruction="Do the thing",
+        starting_point="Signup Page",
+        success_conditions={"screen_key": "done_screen"},
+    )
+    use_case = _use_case_with_ready_study(study)
+    use_case._stimuli.has_analyzed_screens.return_value = True
+    use_case._stimuli.get_screen_graph.return_value = _screen_graph_with(
+        "create_new_account", "done_screen"
+    )
+    use_case._tasks.list_for_study.return_value = [task]
+
+    with pytest.raises(LifecycleError, match="starting_point 'Signup Page'"):
+        await use_case.create_run(
+            user=Mock(), study_id=study.id, population_size=1, task_id=None, config=None, seed=None
+        )
+
+    use_case._runs.create_run.assert_not_awaited()
+
+
+async def test_create_run_rejects_a_success_screen_key_that_matches_no_real_screen():
+    study = _ready_study()
+    task = TaskModel(
+        id=uuid.uuid4(),
+        study_id=study.id,
+        instruction="Do the thing",
+        success_conditions={"screen_key": "Complete page"},
+    )
+    use_case = _use_case_with_ready_study(study)
+    use_case._stimuli.has_analyzed_screens.return_value = True
+    use_case._stimuli.get_screen_graph.return_value = _screen_graph_with("account_created")
+    use_case._tasks.list_for_study.return_value = [task]
+
+    with pytest.raises(LifecycleError, match="success_conditions.screen_key 'Complete page'"):
+        await use_case.create_run(
+            user=Mock(), study_id=study.id, population_size=1, task_id=None, config=None, seed=None
+        )
+
+    use_case._runs.create_run.assert_not_awaited()
+
+
+async def test_create_run_accepts_a_starting_point_and_screen_key_that_both_exist():
+    study = _ready_study()
+    task = TaskModel(
+        id=uuid.uuid4(),
+        study_id=study.id,
+        instruction="Do the thing",
+        starting_point="create_new_account",
+        success_conditions={"screen_key": "done_screen"},
+    )
+    participant = ParticipantRecordModel(id=uuid.uuid4(), audience_id=uuid.uuid4(), traits={})
+    use_case = _use_case_with_ready_study(study)
+    use_case._stimuli.has_analyzed_screens.return_value = True
+    use_case._stimuli.get_screen_graph.return_value = _screen_graph_with(
+        "create_new_account", "done_screen"
+    )
+    use_case._tasks.list_for_study.return_value = [task]
+    use_case._audiences.get_latest_for_study.return_value = Mock(id=uuid.uuid4())
+    use_case._audiences.list_participants.return_value = [participant]
+    use_case._runs.create_run.return_value = Mock(id=uuid.uuid4())
+    use_case._runs.create_participant_run.return_value = Mock(id=uuid.uuid4())
 
     await use_case.create_run(
         user=Mock(), study_id=study.id, population_size=1, task_id=None, config=None, seed=None

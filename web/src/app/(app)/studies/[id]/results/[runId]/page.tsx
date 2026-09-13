@@ -22,11 +22,22 @@ import {
   isTerminalRunStatus,
 } from "@/lib/api/simulations";
 import { listStimuli } from "@/lib/api/stimulus";
+import {
+  formatMetricValue,
+  humanizeKey,
+  metricLabel,
+} from "@/lib/metricLabels";
 import type { Screen } from "@/lib/types";
 
 const POLL_INTERVAL_MS = 3000;
 
-const TABS = ["Summary", "Heatmap", "Scanpaths", "Segments", "Insights"] as const;
+const TABS = [
+  "Summary",
+  "Heatmap",
+  "Scanpaths",
+  "Segments",
+  "Insights",
+] as const;
 type Tab = (typeof TABS)[number];
 
 const SEVERITY_TONE: Record<string, string> = {
@@ -35,7 +46,9 @@ const SEVERITY_TONE: Record<string, string> = {
   low: "border-hairline bg-surface-card",
 };
 
-function screenLookup(stimuli: { screens: Screen[] }[] | undefined): Map<string, Screen> {
+function screenLookup(
+  stimuli: { screens: Screen[] }[] | undefined,
+): Map<string, Screen> {
   const map = new Map<string, Screen>();
   for (const stimulus of stimuli ?? []) {
     for (const screen of stimulus.screens) map.set(screen.id, screen);
@@ -54,7 +67,8 @@ function HeatmapTab({ runId, studyId }: { runId: string; studyId: string }) {
   });
   const screens = screenLookup(stimuli);
 
-  if (!cells) return <p className="text-[13px] text-ink-muted">Loading heatmap…</p>;
+  if (!cells)
+    return <p className="text-[13px] text-ink-muted">Loading heatmap…</p>;
   if (cells.length === 0) {
     return (
       <EmptyState
@@ -72,18 +86,31 @@ function HeatmapTab({ runId, studyId }: { runId: string; studyId: string }) {
   }
 
   return (
-    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
       {[...byScreen.entries()].map(([screenId, screenCells]) => {
         const screen = screens.get(screenId);
         return (
           <Card key={screenId} className="p-3">
-            <p className="mb-2 truncate text-[13px] font-semibold text-ink" title={screen?.screen_key}>
-              {screen?.screen_key ?? screenId}
+            <p
+              className="mb-2 truncate text-[13px] font-semibold text-ink"
+              title={screen?.screen_key}
+            >
+              {screen ? humanizeKey(screen.screen_key) : screenId}
             </p>
-            <div className="relative aspect-video overflow-hidden rounded-md bg-surface-2">
+            {/* No forced aspect ratio here — the image sets its own height
+            (h-auto), so a portrait mobile screenshot renders whole instead of
+            being cropped into a fixed 16:9 box. Heatmap x/y are already
+            fractions of the screen (Analytics Engine's own normalization),
+            so percentage positioning lines up regardless of the image's
+            actual pixel size. */}
+            <div className="relative w-full overflow-hidden rounded-md bg-surface-2">
               {screen?.image_url && (
                 // eslint-disable-next-line @next/next/no-img-element -- external Supabase Storage URL
-                <img src={screen.image_url} alt={screen.screen_key} className="h-full w-full object-cover" />
+                <img
+                  src={screen.image_url}
+                  alt={screen.screen_key}
+                  className="block h-auto w-full"
+                />
               )}
               {screenCells.map((cell, index) => (
                 <span
@@ -94,7 +121,8 @@ function HeatmapTab({ runId, studyId }: { runId: string; studyId: string }) {
                     top: `${cell.y * 100}%`,
                     width: 28,
                     height: 28,
-                    background: "radial-gradient(circle, rgba(220,38,38,0.9) 0%, rgba(220,38,38,0) 70%)",
+                    background:
+                      "radial-gradient(circle, rgba(220,38,38,0.9) 0%, rgba(220,38,38,0) 70%)",
                     opacity: Math.max(0.15, cell.intensity),
                   }}
                 />
@@ -107,6 +135,14 @@ function HeatmapTab({ runId, studyId }: { runId: string; studyId: string }) {
   );
 }
 
+// GAZE dominates a scan-gated screen's event stream (up to MAX_SCAN_ATTEMPTS
+// samples before a persona notices the intended element) — rendering every
+// one as a numbered badge is what made the old view an illegible cluster of
+// 80+ overlapping labels. Only a real action is a decision worth numbering;
+// gaze becomes small unlabeled dots, already covered at the population level
+// by the Heatmap tab.
+const ACTION_TYPES = new Set(["CLICK", "TAP", "OPEN", "SELECT", "BACK"]);
+
 function ScanpathsTab({ runId, studyId }: { runId: string; studyId: string }) {
   const { data: scanpaths } = useQuery({
     queryKey: ["scanpaths", runId],
@@ -118,8 +154,15 @@ function ScanpathsTab({ runId, studyId }: { runId: string; studyId: string }) {
   });
   const screens = screenLookup(stimuli);
   const [selected, setSelected] = useState(0);
+  // screen.width/height come back null for a screenshot upload (only a Figma
+  // import extracts them) — the rendered <img>'s own natural size is the only
+  // reliable coordinate space to normalize a step's raw pixel x/y against.
+  const [naturalSizes, setNaturalSizes] = useState<
+    Record<string, { width: number; height: number }>
+  >({});
 
-  if (!scanpaths) return <p className="text-[13px] text-ink-muted">Loading scanpaths…</p>;
+  if (!scanpaths)
+    return <p className="text-[13px] text-ink-muted">Loading scanpaths…</p>;
   if (scanpaths.length === 0) {
     return (
       <EmptyState
@@ -162,52 +205,117 @@ function ScanpathsTab({ runId, studyId }: { runId: string; studyId: string }) {
           </button>
         ))}
       </div>
+      <p className="text-[12px] text-ink-tertiary">
+        Small dots are glances; numbered markers are the actions this
+        participant actually took, in order.
+      </p>
 
       <div className="flex flex-col gap-4">
         {segments.map((segment, segIndex) => {
           const screen = screens.get(segment.screenId);
-          const width = screen?.width || 390;
-          const height = screen?.height || 844;
+          const natural = naturalSizes[segment.screenId];
+          const width = screen?.width || natural?.width || 390;
+          const height = screen?.height || natural?.height || 844;
+          const actionSteps = segment.steps.filter(
+            (s) => s.x !== null && s.y !== null && ACTION_TYPES.has(s.type),
+          );
+          const gazeSteps = segment.steps.filter(
+            (s) => s.x !== null && s.y !== null && !ACTION_TYPES.has(s.type),
+          );
+          // Consecutive actions on the same element collapse into one marker
+          // with a "×N" count — a dead end (nothing to click through to)
+          // reads as the participant clicking the same button repeatedly,
+          // which used to render as a dozen overlapping numbered badges on
+          // top of each other instead of one legible "clicked this 12 times."
+          const actionGroups: {
+            step: (typeof actionSteps)[number];
+            count: number;
+          }[] = [];
+          for (const step of actionSteps) {
+            const last = actionGroups.at(-1);
+            if (last && last.step.element_id === step.element_id) {
+              last.count += 1;
+            } else {
+              actionGroups.push({ step, count: 1 });
+            }
+          }
           return (
-            <Card key={segIndex} className="p-3">
-              <p className="mb-2 truncate text-[13px] font-semibold text-ink" title={screen?.screen_key}>
-                {segIndex + 1}. {screen?.screen_key ?? segment.screenId}
+            <Card key={segIndex} className="mx-auto w-full max-w-sm p-3">
+              <p
+                className="mb-2 truncate text-[13px] font-semibold text-ink"
+                title={screen?.screen_key}
+              >
+                {segIndex + 1}.{" "}
+                {screen ? humanizeKey(screen.screen_key) : segment.screenId}
               </p>
-              <div className="relative aspect-video overflow-hidden rounded-md bg-surface-2">
+              <div className="relative w-full overflow-hidden rounded-md bg-surface-2">
                 {screen?.image_url && (
                   // eslint-disable-next-line @next/next/no-img-element -- external Supabase Storage URL
                   <img
                     src={screen.image_url}
                     alt={screen.screen_key}
-                    className="h-full w-full object-cover"
+                    className="block h-auto w-full"
+                    onLoad={(e) => {
+                      const img = e.currentTarget;
+                      setNaturalSizes((prev) =>
+                        prev[segment.screenId]
+                          ? prev
+                          : {
+                              ...prev,
+                              [segment.screenId]: {
+                                width: img.naturalWidth,
+                                height: img.naturalHeight,
+                              },
+                            },
+                      );
+                    }}
                   />
                 )}
-                <svg className="absolute inset-0 h-full w-full" viewBox="0 0 100 100" preserveAspectRatio="none">
-                  <polyline
-                    points={segment.steps
-                      .filter((s) => s.x !== null && s.y !== null)
-                      .map((s) => `${((s.x as number) / width) * 100},${((s.y as number) / height) * 100}`)
-                      .join(" ")}
-                    fill="none"
-                    stroke="rgba(37,99,235,0.7)"
-                    strokeWidth={0.6}
-                    vectorEffect="non-scaling-stroke"
-                  />
-                </svg>
-                {segment.steps.map(
-                  (step, stepIndex) =>
-                    step.x !== null &&
-                    step.y !== null && (
-                      <span
-                        key={stepIndex}
-                        className="absolute flex h-5 w-5 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-primary text-[9px] font-bold text-on-primary shadow-sm"
-                        style={{ left: `${(step.x / width) * 100}%`, top: `${(step.y / height) * 100}%` }}
-                        title={`${step.type} · scan ${step.scan_number ?? "–"}`}
-                      >
-                        {step.sequence_no}
-                      </span>
-                    )
+                {actionGroups.length > 1 && (
+                  <svg
+                    className="absolute inset-0 h-full w-full"
+                    viewBox="0 0 100 100"
+                    preserveAspectRatio="none"
+                  >
+                    <polyline
+                      points={actionGroups
+                        .map(
+                          ({ step: s }) =>
+                            `${((s.x as number) / width) * 100},${((s.y as number) / height) * 100}`,
+                        )
+                        .join(" ")}
+                      fill="none"
+                      stroke="rgba(37,99,235,0.6)"
+                      strokeWidth={0.6}
+                      vectorEffect="non-scaling-stroke"
+                    />
+                  </svg>
                 )}
+                {gazeSteps.map((step, stepIndex) => (
+                  <span
+                    key={`gaze-${stepIndex}`}
+                    className="absolute h-1.5 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-ink/25"
+                    style={{
+                      left: `${((step.x as number) / width) * 100}%`,
+                      top: `${((step.y as number) / height) * 100}%`,
+                    }}
+                    title={`glanced · scan ${step.scan_number ?? "–"}`}
+                  />
+                ))}
+                {actionGroups.map(({ step, count }, groupIndex) => (
+                  <span
+                    key={`action-${groupIndex}`}
+                    className="absolute flex h-6 min-w-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-primary px-1 text-[9px] font-bold text-on-primary shadow-sm"
+                    style={{
+                      left: `${((step.x as number) / width) * 100}%`,
+                      top: `${((step.y as number) / height) * 100}%`,
+                    }}
+                    title={count > 1 ? `${step.type} × ${count}` : step.type}
+                  >
+                    {groupIndex + 1}
+                    {count > 1 && ` ×${count}`}
+                  </span>
+                ))}
               </div>
             </Card>
           );
@@ -223,7 +331,8 @@ function SegmentsTab({ runId }: { runId: string }) {
     queryFn: () => getSegments(runId),
   });
 
-  if (!segments) return <p className="text-[13px] text-ink-muted">Loading segments…</p>;
+  if (!segments)
+    return <p className="text-[13px] text-ink-muted">Loading segments…</p>;
   if (segments.length === 0) {
     return (
       <EmptyState
@@ -233,31 +342,78 @@ function SegmentsTab({ runId }: { runId: string }) {
     );
   }
 
+  // Pivot "<trait>_low"/"<trait>_high" rows into one low-vs-high comparison
+  // per trait — a flat table of 20+ rows repeating the same trait name next
+  // to a raw metric key was the exact clutter being reported; a researcher
+  // (or the PM they hand this to) wants "do more confident users do better?"
+  // answerable at a glance, not assembled by eye from a long list.
+  type Cell = { value: number | null; sampleSize: number | null };
+  const byTrait = new Map<
+    string,
+    { low: Map<string, Cell>; high: Map<string, Cell> }
+  >();
+  const metricOrder: string[] = [];
+  for (const row of segments) {
+    const match = row.segment.match(/^(.*)_(low|high)$/);
+    if (!match) continue;
+    const [, trait, bucket] = match;
+    const entry = byTrait.get(trait) ?? { low: new Map(), high: new Map() };
+    entry[bucket as "low" | "high"].set(row.metric, {
+      value: row.value,
+      sampleSize: row.sample_size,
+    });
+    byTrait.set(trait, entry);
+    if (!metricOrder.includes(row.metric)) metricOrder.push(row.metric);
+  }
+
   return (
-    <Card className="overflow-x-auto p-0">
-      <table className="w-full text-[13px]">
-        <thead>
-          <tr className="border-b border-hairline text-left text-ink-tertiary">
-            <th className="px-4 py-2.5 font-medium">Segment</th>
-            <th className="px-4 py-2.5 font-medium">Metric</th>
-            <th className="px-4 py-2.5 font-medium">Value</th>
-            <th className="px-4 py-2.5 font-medium">n</th>
-          </tr>
-        </thead>
-        <tbody>
-          {segments.map((row) => (
-            <tr key={row.id} className="border-b border-hairline last:border-0">
-              <td className="px-4 py-2.5 text-ink">{row.segment}</td>
-              <td className="px-4 py-2.5 text-ink-muted">{row.metric}</td>
-              <td className="px-4 py-2.5 font-mono tabular-nums text-ink">{row.value ?? "—"}</td>
-              <td className="px-4 py-2.5 font-mono tabular-nums text-ink-tertiary">
-                {row.sample_size ?? "—"}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </Card>
+    <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+      {[...byTrait.entries()].map(([trait, { low, high }]) => (
+        <Card key={trait} className="overflow-x-auto p-0">
+          <table className="w-full text-[13px]">
+            <thead>
+              <tr className="border-b border-hairline text-left">
+                <th className="px-4 py-2.5 font-semibold text-ink">
+                  {humanizeKey(trait)}
+                </th>
+                <th className="px-4 py-2.5 font-medium text-ink-tertiary">
+                  Low
+                </th>
+                <th className="px-4 py-2.5 font-medium text-ink-tertiary">
+                  High
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {metricOrder
+                .filter((metric) => low.has(metric) || high.has(metric))
+                .map((metric) => (
+                  <tr
+                    key={metric}
+                    className="border-b border-hairline last:border-0"
+                  >
+                    <td className="px-4 py-2.5 text-ink-muted">
+                      {metricLabel(metric)}
+                    </td>
+                    <td className="px-4 py-2.5 font-mono tabular-nums text-ink">
+                      {formatMetricValue(
+                        metric,
+                        low.get(metric)?.value ?? null,
+                      )}
+                    </td>
+                    <td className="px-4 py-2.5 font-mono tabular-nums text-ink">
+                      {formatMetricValue(
+                        metric,
+                        high.get(metric)?.value ?? null,
+                      )}
+                    </td>
+                  </tr>
+                ))}
+            </tbody>
+          </table>
+        </Card>
+      ))}
+    </div>
   );
 }
 
@@ -267,7 +423,8 @@ function InsightsTab({ runId }: { runId: string }) {
     queryFn: () => getInsights(runId),
   });
 
-  if (!insights) return <p className="text-[13px] text-ink-muted">Loading insights…</p>;
+  if (!insights)
+    return <p className="text-[13px] text-ink-muted">Loading insights…</p>;
   if (insights.length === 0) {
     return (
       <EmptyState
@@ -285,7 +442,9 @@ function InsightsTab({ runId }: { runId: string }) {
           className={`border ${SEVERITY_TONE[insight.severity] ?? SEVERITY_TONE.low}`}
         >
           <div className="flex items-center justify-between gap-3">
-            <h3 className="text-[14px] font-semibold text-ink">{insight.title}</h3>
+            <h3 className="text-[14px] font-semibold text-ink">
+              {insight.title}
+            </h3>
             <StatusBadge status={insight.severity.toUpperCase()} />
           </div>
           <p className="mt-2 text-[13px] text-ink-muted">{insight.summary}</p>
@@ -295,18 +454,19 @@ function InsightsTab({ runId }: { runId: string }) {
               {insight.recommendation}
             </p>
           )}
-          {insight.affected_segments && insight.affected_segments.length > 0 && (
-            <div className="mt-2 flex flex-wrap gap-1.5">
-              {insight.affected_segments.map((segment) => (
-                <span
-                  key={segment}
-                  className="rounded-full bg-surface-2 px-2 py-0.5 text-[11px] text-ink-tertiary"
-                >
-                  {segment}
-                </span>
-              ))}
-            </div>
-          )}
+          {insight.affected_segments &&
+            insight.affected_segments.length > 0 && (
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {insight.affected_segments.map((segment) => (
+                  <span
+                    key={segment}
+                    className="rounded-full bg-surface-2 px-2 py-0.5 text-[11px] text-ink-tertiary"
+                  >
+                    {segment}
+                  </span>
+                ))}
+              </div>
+            )}
           {insight.evidence_strength && (
             <p className="mt-2 font-mono text-[11px] text-ink-tertiary">
               evidence: {JSON.stringify(insight.evidence_strength)}
@@ -327,18 +487,22 @@ export default function ResultsPage() {
     queryKey: ["simulation-run", runId],
     queryFn: () => getSimulationRun(runId),
     refetchInterval: (query) =>
-      query.state.data && isTerminalRunStatus(query.state.data.status) ? false : POLL_INTERVAL_MS,
+      query.state.data && isTerminalRunStatus(query.state.data.status)
+        ? false
+        : POLL_INTERVAL_MS,
   });
 
   const cancelMutation = useMutation({
     mutationFn: () => cancelSimulationRun(runId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["simulation-run", runId] }),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: ["simulation-run", runId] }),
   });
 
   const { data: metrics } = useQuery({
     queryKey: ["simulation-metrics", runId],
     queryFn: () => getMetrics(runId),
-    refetchInterval: run && isTerminalRunStatus(run.status) ? false : POLL_INTERVAL_MS,
+    refetchInterval:
+      run && isTerminalRunStatus(run.status) ? false : POLL_INTERVAL_MS,
   });
 
   const studyId = run?.study_id;
@@ -352,7 +516,9 @@ export default function ResultsPage() {
           <span className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-tertiary">
             Simulation run
           </span>
-          <h2 className="mt-1 font-mono text-[13px] tabular-nums text-ink-muted">{run.id}</h2>
+          <h2 className="mt-1 font-mono text-[13px] tabular-nums text-ink-muted">
+            {run.id}
+          </h2>
           <p className="mt-1 font-mono text-[13px] tabular-nums text-ink-muted">
             population {run.population_size}
             {run.seed !== null && ` · seed ${run.seed}`}
@@ -383,7 +549,8 @@ export default function ResultsPage() {
 
       {!isTerminalRunStatus(run.status) && (
         <p className="text-[13px] text-ink-tertiary">
-          Polling every {POLL_INTERVAL_MS / 1000}s — this run is still in progress.
+          Polling every {POLL_INTERVAL_MS / 1000}s — this run is still in
+          progress.
         </p>
       )}
 
@@ -404,9 +571,14 @@ export default function ResultsPage() {
         ))}
       </nav>
 
-      {tab === "Summary" && (metrics ? <MetricsGrid metrics={metrics} /> : null)}
-      {tab === "Heatmap" && studyId && <HeatmapTab runId={runId} studyId={studyId} />}
-      {tab === "Scanpaths" && studyId && <ScanpathsTab runId={runId} studyId={studyId} />}
+      {tab === "Summary" &&
+        (metrics ? <MetricsGrid metrics={metrics} /> : null)}
+      {tab === "Heatmap" && studyId && (
+        <HeatmapTab runId={runId} studyId={studyId} />
+      )}
+      {tab === "Scanpaths" && studyId && (
+        <ScanpathsTab runId={runId} studyId={studyId} />
+      )}
       {tab === "Segments" && <SegmentsTab runId={runId} />}
       {tab === "Insights" && <InsightsTab runId={runId} />}
     </div>
