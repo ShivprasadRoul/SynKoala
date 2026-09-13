@@ -1,5 +1,6 @@
 import logging
 import uuid
+from collections import deque
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -8,7 +9,6 @@ from app.agents.providers.vision_provider import (
     PydanticAIVisionProvider,
     ScreenAnalysis,
     ScreenElementSummary,
-    ScreenGraphInference,
     ScreenRole,
     ScreenRoleInference,
     ScreenSummary,
@@ -188,6 +188,70 @@ def _resolve_transitions(
     return transitions
 
 
+MAX_TRANSITION_INFERENCE_ATTEMPTS = 3
+
+
+def _reachable_screen_ids(
+    screens: list[ScreenModel], transitions: list[dict], start_key: str
+) -> set[uuid.UUID]:
+    """BFS over a resolved edge list from the screen keyed `start_key`. Used to
+    score `infer_transitions`' output, not to gate anything at request time —
+    the same model call given the same screens can come back on one attempt
+    with a fully connected flow and on another with most of it severed (a
+    real, reproduced discrepancy: one run's `infer_transitions` returned an
+    edge only into the flow's entry screen and none out of it, stranding
+    every other screen; a second identical call over the same input returned
+    a complete chain)."""
+    ids_by_key = {screen.screen_key: screen.id for screen in screens}
+    start_id = ids_by_key.get(start_key)
+    if start_id is None:
+        return set()
+    adjacency: dict[uuid.UUID, list[uuid.UUID]] = {}
+    for transition in transitions:
+        adjacency.setdefault(transition["from_screen_id"], []).append(transition["to_screen_id"])
+    seen = {start_id}
+    queue = deque([start_id])
+    while queue:
+        current = queue.popleft()
+        for next_id in adjacency.get(current, []):
+            if next_id not in seen:
+                seen.add(next_id)
+                queue.append(next_id)
+    return seen
+
+
+async def _infer_best_transitions(
+    provider: PydanticAIVisionProvider,
+    study_screens: list[ScreenModel],
+    surviving: list[ScreenModel],
+    canonical: dict[str, str],
+    entry_key: str | None,
+    success_key: str | None,
+) -> list[dict]:
+    """Calls `infer_transitions` up to `MAX_TRANSITION_INFERENCE_ATTEMPTS`
+    times, keeping whichever attempt leaves the most screens reachable from
+    the flow's own entry screen — stopping early once one attempt actually
+    connects entry to success. Without `entry_key` (classify_screens found no
+    clear starting screen) there's no meaningful way to score one attempt
+    against another, so this makes exactly one call, same as before."""
+    if entry_key is None:
+        inference = await provider.infer_transitions([_screen_summary(s) for s in surviving])
+        return _resolve_transitions(study_screens, inference.transitions, canonical)
+
+    best_transitions: list[dict] = []
+    best_reached = -1
+    for _attempt in range(MAX_TRANSITION_INFERENCE_ATTEMPTS):
+        inference = await provider.infer_transitions([_screen_summary(s) for s in surviving])
+        transitions = _resolve_transitions(study_screens, inference.transitions, canonical)
+        reached = _reachable_screen_ids(study_screens, transitions, entry_key)
+        if len(reached) > best_reached:
+            best_transitions, best_reached = transitions, len(reached)
+        success_id = next((s.id for s in study_screens if s.screen_key == success_key), None)
+        if success_key is not None and success_id in reached:
+            break
+    return best_transitions
+
+
 async def handle_analyze_stimulus(session: AsyncSession, payload: dict) -> None:
     """VisionProvider (planning/05-stimulus-engine.md): analyzes every not-yet-
     analyzed screen belonging to this stimulus, then re-infers the screen graph
@@ -214,11 +278,22 @@ async def handle_analyze_stimulus(session: AsyncSession, payload: dict) -> None:
             raw_analysis=analysis.model_dump(),
         )
 
-    study_screens = [
-        screen
-        for screen in await stimuli.list_screens_for_study(stimulus.study_id)
-        if screen.analysis is not None
-    ]
+    all_study_screens = await stimuli.list_screens_for_study(stimulus.study_id)
+    # `request_analysis` (planning/02-api.md) enqueues one analyze_stimulus job
+    # per *stimulus*, and a multi-screenshot upload is one stimulus per screen
+    # — so a 12-screen upload fires 12 of these jobs. classify_screens/
+    # infer_transitions need every screen's own analysis to judge duplicates
+    # and transitions correctly, and used to re-run here on every single one
+    # of those jobs regardless: not just wasted (up to 11 redundant whole-
+    # study LLM calls), but a real race, since each call's
+    # replace_transitions_for_study wipes and rewrites the same rows — the
+    # study's final graph ended up being whichever of the N concurrent jobs'
+    # results happened to write last, not any particular one. Only the job
+    # that finds every sibling screen already analyzed actually runs this
+    # step; every earlier-finishing one returns immediately instead.
+    if any(screen.analysis is None for screen in all_study_screens):
+        return
+    study_screens = [screen for screen in all_study_screens if screen.analysis is not None]
     if len(study_screens) < 2:
         return  # nothing to connect yet
 
@@ -241,8 +316,9 @@ async def handle_analyze_stimulus(session: AsyncSession, payload: dict) -> None:
     surviving = [
         screen for screen in study_screens if canonical.get(screen.screen_key) == screen.screen_key
     ]
-    inference: ScreenGraphInference = await provider.infer_transitions(
-        [_screen_summary(screen) for screen in surviving]
+    entry_key = next((key for key, role in roles.items() if role["role"] == "entry"), None)
+    success_key = next((key for key, role in roles.items() if role["role"] == "success"), None)
+    transitions = await _infer_best_transitions(
+        provider, study_screens, surviving, canonical, entry_key, success_key
     )
-    transitions = _resolve_transitions(study_screens, inference.transitions, canonical)
     await stimuli.replace_transitions_for_study(stimulus.study_id, transitions)

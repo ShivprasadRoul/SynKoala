@@ -1,7 +1,9 @@
 import uuid
+from unittest.mock import AsyncMock, Mock
 
 from app.agents.providers.vision_provider import InferredTransition, ScreenRole
 from app.db.models import ScreenModel, UIElementModel
+from app.workers.jobs import analyze_stimulus as job_module
 from app.workers.jobs.analyze_stimulus import (
     _canonical_screen_keys,
     _resolve_screen_roles,
@@ -335,3 +337,312 @@ def test_resolve_transitions_drops_a_remapped_edge_whose_trigger_has_no_counterp
     )
 
     assert transitions == []
+
+
+# --- _reachable_screen_ids / _infer_best_transitions (LLM non-determinism) --
+#
+# Reproduced live: the same infer_transitions call, given the same input, can
+# return a fully-connected flow on one attempt and a severed one (an edge
+# only into the entry screen, none out of it) on another — a study published
+# with the severed version put every participant into a guaranteed 100%
+# drop-off. Retrying and keeping the best-connected attempt is the fix.
+
+HOME2_ID = uuid.uuid4()
+CHECKOUT_ID = uuid.uuid4()
+CONFIRM2_ID = uuid.uuid4()
+CTA2_ID = uuid.uuid4()
+PAY_ID = uuid.uuid4()
+
+
+def _linear_flow_screens() -> list[ScreenModel]:
+    return [
+        ScreenModel(
+            id=HOME2_ID,
+            stimulus_id=uuid.uuid4(),
+            screen_key="home",
+            width=None,
+            height=None,
+            elements=[
+                UIElementModel(
+                    id=CTA2_ID,
+                    screen_id=HOME2_ID,
+                    element_key="checkout_button",
+                    type="button",
+                    text="Checkout",
+                    bbox=[0, 0, 10, 10],
+                    properties={"semantic_role": "primary_action", "interactable": True},
+                )
+            ],
+        ),
+        ScreenModel(
+            id=CHECKOUT_ID,
+            stimulus_id=uuid.uuid4(),
+            screen_key="checkout",
+            width=None,
+            height=None,
+            elements=[
+                UIElementModel(
+                    id=PAY_ID,
+                    screen_id=CHECKOUT_ID,
+                    element_key="pay_button",
+                    type="button",
+                    text="Pay",
+                    bbox=[0, 0, 10, 10],
+                    properties={"semantic_role": "primary_action", "interactable": True},
+                )
+            ],
+        ),
+        ScreenModel(
+            id=CONFIRM2_ID,
+            stimulus_id=uuid.uuid4(),
+            screen_key="confirm",
+            width=None,
+            height=None,
+            elements=[],
+        ),
+    ]
+
+
+class _QueuedProvider:
+    """Returns one canned ScreenGraphInference per call, in order — stands in
+    for a real vision model whose infer_transitions output varies call to
+    call given identical input."""
+
+    def __init__(self, responses):
+        from app.agents.providers.vision_provider import ScreenGraphInference
+
+        self._responses = [ScreenGraphInference(transitions=t) for t in responses]
+        self.calls = 0
+
+    async def infer_transitions(self, _screens):
+        response = self._responses[min(self.calls, len(self._responses) - 1)]
+        self.calls += 1
+        return response
+
+
+def test_reachable_screen_ids_follows_resolved_edges_from_the_entry_screen():
+    screens = _linear_flow_screens()
+    transitions = [
+        {"from_screen_id": HOME2_ID, "to_screen_id": CHECKOUT_ID},
+        {"from_screen_id": CHECKOUT_ID, "to_screen_id": CONFIRM2_ID},
+    ]
+
+    reached = job_module._reachable_screen_ids(screens, transitions, "home")
+
+    assert reached == {HOME2_ID, CHECKOUT_ID, CONFIRM2_ID}
+
+
+def test_reachable_screen_ids_returns_empty_for_an_unknown_start_key():
+    screens = _linear_flow_screens()
+
+    assert job_module._reachable_screen_ids(screens, [], "nonexistent") == set()
+
+
+async def test_infer_best_transitions_retries_past_a_severed_first_attempt():
+    """The exact scenario reproduced live: attempt 1 connects nothing past the
+    entry screen (home has no edge out at all in this attempt); attempt 2 is
+    the complete chain. The severed attempt must not be what gets persisted
+    just because it came first."""
+    screens = _linear_flow_screens()
+    canonical = {"home": "home", "checkout": "checkout", "confirm": "confirm"}
+    severed = []  # no edges at all out of home on the first attempt
+    complete = [
+        InferredTransition(
+            from_screen_key="home",
+            element_key="checkout_button",
+            action="CLICK",
+            to_screen_key="checkout",
+        ),
+        InferredTransition(
+            from_screen_key="checkout",
+            element_key="pay_button",
+            action="CLICK",
+            to_screen_key="confirm",
+        ),
+    ]
+    provider = _QueuedProvider([severed, complete])
+
+    transitions = await job_module._infer_best_transitions(
+        provider, screens, screens, canonical, entry_key="home", success_key="confirm"
+    )
+
+    assert provider.calls == 2
+    reached = job_module._reachable_screen_ids(screens, transitions, "home")
+    assert reached == {HOME2_ID, CHECKOUT_ID, CONFIRM2_ID}
+
+
+async def test_infer_best_transitions_stops_early_once_success_is_reached():
+    screens = _linear_flow_screens()
+    canonical = {"home": "home", "checkout": "checkout", "confirm": "confirm"}
+    complete = [
+        InferredTransition(
+            from_screen_key="home",
+            element_key="checkout_button",
+            action="CLICK",
+            to_screen_key="checkout",
+        ),
+        InferredTransition(
+            from_screen_key="checkout",
+            element_key="pay_button",
+            action="CLICK",
+            to_screen_key="confirm",
+        ),
+    ]
+    # A second canned response that would fail the assertion below if ever
+    # consumed — proves the loop stopped after the first, already-successful
+    # attempt rather than spending a second call regardless.
+    provider = _QueuedProvider([complete, []])
+
+    transitions = await job_module._infer_best_transitions(
+        provider, screens, screens, canonical, entry_key="home", success_key="confirm"
+    )
+
+    assert provider.calls == 1
+    assert len(transitions) == 2
+
+
+async def test_infer_best_transitions_makes_one_call_without_a_known_entry_screen():
+    screens = _linear_flow_screens()
+    canonical = {"home": "home", "checkout": "checkout", "confirm": "confirm"}
+    provider = _QueuedProvider([[]])
+
+    await job_module._infer_best_transitions(
+        provider, screens, screens, canonical, entry_key=None, success_key=None
+    )
+
+    assert provider.calls == 1
+
+
+# --- classify/infer only runs once all sibling screens are analyzed ---
+#
+# request_analysis enqueues one analyze_stimulus job per stimulus, and a
+# multi-screenshot upload is one stimulus per screen — a 12-screen upload
+# fires 12 of these jobs. classify_screens/infer_transitions used to re-run
+# on every single one, wasting up to 11 redundant whole-study LLM calls and
+# racing each other's replace_transitions_for_study writes. Only the job
+# that finds every sibling screen already analyzed should actually run it.
+
+
+class _FakeStimuliService:
+    def __init__(self, stimulus, all_screens):
+        self._stimulus = stimulus
+        self._all_screens = all_screens
+        self.classify_calls = 0
+        self.save_roles_calls = 0
+        self.replace_transitions_calls = 0
+
+    async def get_with_screens(self, _stimulus_id):
+        return self._stimulus
+
+    async def list_screens_for_study(self, _study_id):
+        return self._all_screens
+
+    async def save_screen_analysis(self, screen, elements, raw_analysis):
+        screen.analysis = raw_analysis
+        screen.elements = [
+            Mock(
+                **e,
+                properties={"semantic_role": e["semantic_role"], "interactable": e["interactable"]},
+            )
+            for e in elements
+        ]
+
+    async def save_screen_roles(self, screens, roles):
+        self.save_roles_calls += 1
+
+    async def replace_transitions_for_study(self, study_id, transitions):
+        self.replace_transitions_calls += 1
+
+
+class _FakeProvider:
+    def __init__(self):
+        self.classify_calls = 0
+        self.infer_calls = 0
+
+    async def analyze_screen(self, image, content_type, image_size=None):
+        from app.agents.providers.vision_provider import ScreenAnalysis
+
+        return ScreenAnalysis(elements=[])
+
+    async def classify_screens(self, screens):
+        from app.agents.providers.vision_provider import ScreenRoleInference
+
+        self.classify_calls += 1
+        return ScreenRoleInference(screens=[])
+
+    async def infer_transitions(self, screens):
+        from app.agents.providers.vision_provider import ScreenGraphInference
+
+        self.infer_calls += 1
+        return ScreenGraphInference(transitions=[])
+
+
+async def test_handle_analyze_stimulus_skips_classify_while_a_sibling_screen_is_unanalyzed(
+    monkeypatch,
+):
+    unanalyzed_sibling = ScreenModel(
+        id=uuid.uuid4(), stimulus_id=uuid.uuid4(), screen_key="other", elements=[], analysis=None
+    )
+    this_screen = ScreenModel(
+        id=uuid.uuid4(),
+        stimulus_id=uuid.uuid4(),
+        screen_key="this_one",
+        elements=[],
+        analysis=None,
+        image_url="stimuli/x/original",
+    )
+    stimulus = Mock(id=uuid.uuid4(), study_id=uuid.uuid4(), screens=[this_screen])
+    fake_stimuli = _FakeStimuliService(stimulus, all_screens=[this_screen, unanalyzed_sibling])
+    fake_provider = _FakeProvider()
+
+    monkeypatch.setattr(job_module, "StimulusService", lambda session: fake_stimuli)
+    monkeypatch.setattr(job_module, "PydanticAIVisionProvider", lambda: fake_provider)
+    monkeypatch.setattr(
+        job_module, "download_object", AsyncMock(return_value=(b"bytes", "image/png"))
+    )
+
+    await job_module.handle_analyze_stimulus(
+        session=None, payload={"stimulus_id": str(stimulus.id)}
+    )
+
+    assert this_screen.analysis is not None  # this job's own screen was still analyzed
+    assert fake_provider.classify_calls == 0
+    assert fake_provider.infer_calls == 0
+    assert fake_stimuli.replace_transitions_calls == 0
+
+
+async def test_handle_analyze_stimulus_runs_classify_once_every_sibling_is_analyzed(monkeypatch):
+    already_analyzed_sibling = ScreenModel(
+        id=uuid.uuid4(),
+        stimulus_id=uuid.uuid4(),
+        screen_key="other",
+        elements=[],
+        analysis={"elements": []},
+    )
+    this_screen = ScreenModel(
+        id=uuid.uuid4(),
+        stimulus_id=uuid.uuid4(),
+        screen_key="this_one",
+        elements=[],
+        analysis=None,
+        image_url="stimuli/x/original",
+    )
+    stimulus = Mock(id=uuid.uuid4(), study_id=uuid.uuid4(), screens=[this_screen])
+    fake_stimuli = _FakeStimuliService(
+        stimulus, all_screens=[this_screen, already_analyzed_sibling]
+    )
+    fake_provider = _FakeProvider()
+
+    monkeypatch.setattr(job_module, "StimulusService", lambda session: fake_stimuli)
+    monkeypatch.setattr(job_module, "PydanticAIVisionProvider", lambda: fake_provider)
+    monkeypatch.setattr(
+        job_module, "download_object", AsyncMock(return_value=(b"bytes", "image/png"))
+    )
+
+    await job_module.handle_analyze_stimulus(
+        session=None, payload={"stimulus_id": str(stimulus.id)}
+    )
+
+    assert fake_provider.classify_calls == 1
+    assert fake_provider.infer_calls == 1
+    assert fake_stimuli.replace_transitions_calls == 1
