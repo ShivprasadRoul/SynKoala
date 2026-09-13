@@ -26,15 +26,19 @@ class _FakeSession:
 
 
 def _metric(level, metric, value, element_id=None, screen_id=None, sample_size=40):
-    return Mock(
-        id=uuid.uuid4(),
-        level=level,
-        metric=metric,
-        value=value,
-        element_id=element_id,
-        screen_id=screen_id,
-        sample_size=sample_size,
-    )
+    # A plain dict, not a Mock — ResultsService.get_metrics really returns
+    # dicts (element_key/screen_key enrichment, planning/09); a Mock here
+    # would hide the exact attribute-vs-dict-access mismatch that broke
+    # generate_insights.py's own `_metric_records` in production.
+    return {
+        "id": uuid.uuid4(),
+        "level": level,
+        "metric": metric,
+        "value": value,
+        "element_id": element_id,
+        "screen_id": screen_id,
+        "sample_size": sample_size,
+    }
 
 
 def _patch_services(
@@ -116,7 +120,7 @@ async def test_generate_insights_persists_a_validated_insight_and_its_evidence(m
     assert insights[0].title == "Users struggle to find the CTA"
     assert insights[0].evidence_strength["sample_size"] == 40
     assert len(evidence_rows) == 1
-    assert evidence_rows[0].metric_id == metric.id
+    assert evidence_rows[0].metric_id == metric["id"]
     assert evidence_rows[0].insight_id == insights[0].id
     assert len(session.executed) == 2  # delete insight_evidence, delete insights
 

@@ -21,25 +21,28 @@ def _participant_model_of(run) -> str:
 async def _run_summary(
     results: ResultsService, run_id: uuid.UUID, element_key_by_id: dict[uuid.UUID, str]
 ) -> RunSummary:
+    # ResultsService.get_metrics returns plain dicts (element_key/screen_key
+    # enrichment, planning/09) rather than ORM rows — dict-key access, not
+    # attribute access.
     metrics_by_level = await results.get_metrics(run_id)
     flat = [m for level in metrics_by_level.values() for m in level]
-    completion = next((m for m in flat if m.metric == "completion_rate"), None)
+    completion = next((m for m in flat if m["metric"] == "completion_rate"), None)
     return RunSummary(
-        completion_rate=completion.value if completion else None,
-        sample_size=completion.sample_size if completion else None,
+        completion_rate=completion["value"] if completion else None,
+        sample_size=completion["sample_size"] if completion else None,
         click_rates={
-            element_key_by_id[m.element_id]: m.value
+            element_key_by_id[m["element_id"]]: m["value"]
             for m in flat
-            if m.metric == "click_rate"
-            and m.element_id in element_key_by_id
-            and m.value is not None
+            if m["metric"] == "click_rate"
+            and m["element_id"] in element_key_by_id
+            and m["value"] is not None
         },
         attention_shares={
-            element_key_by_id[m.element_id]: m.value
+            element_key_by_id[m["element_id"]]: m["value"]
             for m in flat
-            if m.metric == "attention_share"
-            and m.element_id in element_key_by_id
-            and m.value is not None
+            if m["metric"] == "attention_share"
+            and m["element_id"] in element_key_by_id
+            and m["value"] is not None
         },
     )
 

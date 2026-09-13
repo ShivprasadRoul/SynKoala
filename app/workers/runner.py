@@ -3,7 +3,7 @@ import logging
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.db.models import JobModel
 from app.db.session import async_session_factory
@@ -48,11 +48,13 @@ async def _process_job(job_id: uuid.UUID) -> None:
         job = await session.get(JobModel, job_id)
         if job is None:
             return
-        handler = HANDLERS.get(job.job_type)
+        job_type = job.job_type
+        payload = job.payload
+        handler = HANDLERS.get(job_type)
         try:
             if handler is None:
-                raise ValueError(f"No handler registered for job_type={job.job_type!r}")
-            await handler(session, job.payload)
+                raise ValueError(f"No handler registered for job_type={job_type!r}")
+            await handler(session, payload)
         except Exception as exc:
             # A handler that fails mid-flush (e.g. a DB constraint violation)
             # leaves the session's transaction already rolled back server-side
@@ -62,26 +64,47 @@ async def _process_job(job_id: uuid.UUID) -> None:
             # (see app/services/stimulus_service.py's null-byte-stripping fix,
             # landed alongside this one, for the case that first surfaced it).
             await session.rollback()
-            job.attempts += 1
-            job.status = "PENDING" if job.attempts < MAX_ATTEMPTS else "FAILED"
+            # `rollback()` expires every attribute on `job` — reading
+            # `job.attempts` as a plain Python attribute here would lazily
+            # reload it, and that implicit reload path doesn't run inside
+            # SQLAlchemy's async/greenlet bridge the way an explicit `await
+            # session.execute(...)` does. It surfaced in production as a
+            # `MissingGreenlet` crash that replaced the original job error
+            # with a confusing, unrelated one and left the job stuck without
+            # ever recording the failure. Computing the increment in SQL
+            # (never reading the expired attribute in Python) sidesteps it —
+            # job_type/payload above were already captured before the
+            # handler ran, for the same reason.
+            new_attempts = (
+                await session.scalars(
+                    update(JobModel)
+                    .where(JobModel.id == job_id)
+                    .values(attempts=JobModel.attempts + 1)
+                    .returning(JobModel.attempts)
+                )
+            ).one()
+            status = "PENDING" if new_attempts < MAX_ATTEMPTS else "FAILED"
+            await session.execute(
+                update(JobModel).where(JobModel.id == job_id).values(status=status)
+            )
             logger.warning(
                 "job %s (%s) failed attempt %s/%s: %s",
-                job.id,
-                job.job_type,
-                job.attempts,
+                job_id,
+                job_type,
+                new_attempts,
                 MAX_ATTEMPTS,
                 exc,
             )
-            if job.status == "FAILED":
-                on_permanent_failure = ON_PERMANENT_FAILURE.get(job.job_type)
+            if status == "FAILED":
+                on_permanent_failure = ON_PERMANENT_FAILURE.get(job_type)
                 if on_permanent_failure is not None:
                     try:
-                        await on_permanent_failure(session, job.payload)
+                        await on_permanent_failure(session, payload)
                     except Exception:
                         logger.exception(
                             "job %s (%s) permanent-failure bookkeeping also failed",
-                            job.id,
-                            job.job_type,
+                            job_id,
+                            job_type,
                         )
         else:
             job.status = "DONE"

@@ -206,7 +206,8 @@ async def handle_analyze_stimulus(session: AsyncSession, payload: dict) -> None:
         if not screen.image_url:
             raise LifecycleError(f"Screen {screen.id} has no uploaded image to analyze")
         image_bytes, content_type = await download_object(screen.image_url)
-        analysis = await provider.analyze_screen(image_bytes, content_type)
+        image_size = (screen.width, screen.height) if screen.width and screen.height else None
+        analysis = await provider.analyze_screen(image_bytes, content_type, image_size=image_size)
         await stimuli.save_screen_analysis(
             screen,
             elements=_elements_for_persistence(analysis),

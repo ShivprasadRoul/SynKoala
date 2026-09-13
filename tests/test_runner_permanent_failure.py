@@ -15,7 +15,28 @@ class _FakeJob:
         self.locked_at = None
 
 
+class _OneResult:
+    """Mimics `ScalarResult.one()` for the fake `attempts += 1 RETURNING
+    attempts` update below."""
+
+    def __init__(self, value: int) -> None:
+        self._value = value
+
+    def one(self) -> int:
+        return self._value
+
+
 class _FakeSession:
+    """Real production code (runner.py's except block) never mutates
+    `job.attempts`/`job.status` as Python attributes anymore — after
+    `rollback()` those are expired ORM attributes, and reading one lazily
+    reloads it outside SQLAlchemy's async/greenlet bridge, which crashed with
+    `MissingGreenlet` in production instead of recording the original job
+    error. The fix issues raw `UPDATE ... RETURNING` statements instead, so
+    this fake simulates exactly those two statements against the one fake
+    job, rather than mutating it via attribute access the way the old code
+    did."""
+
     def __init__(self, job: _FakeJob) -> None:
         self._job = job
         self.rollback_calls = 0
@@ -28,6 +49,15 @@ class _FakeSession:
 
     async def rollback(self) -> None:
         self.rollback_calls += 1
+
+    async def scalars(self, _stmt):
+        self._job.attempts += 1
+        return _OneResult(self._job.attempts)
+
+    async def execute(self, stmt):
+        compiled = stmt.compile()
+        if "status" in compiled.params:
+            self._job.status = compiled.params["status"]
 
 
 @asynccontextmanager

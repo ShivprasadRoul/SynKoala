@@ -23,20 +23,23 @@ async def _metric_records(
     element_key_by_id: dict[uuid.UUID, str],
     screen_key_by_id: dict[uuid.UUID, str],
 ) -> list[MetricRecord]:
+    # ResultsService.get_metrics returns plain dicts (element_key/screen_key
+    # enrichment, planning/09) rather than ORM rows — dict-key access, not
+    # attribute access.
     metrics_by_level = await results.get_metrics(run_id)
     return [
         MetricRecord(
-            id=m.id,
-            level=m.level,
-            metric=m.metric,
-            element=element_key_by_id.get(m.element_id) if m.element_id else None,
-            screen=screen_key_by_id.get(m.screen_id) if m.screen_id else None,
-            value=m.value,
-            sample_size=m.sample_size,
+            id=m["id"],
+            level=m["level"],
+            metric=m["metric"],
+            element=element_key_by_id.get(m["element_id"]) if m["element_id"] else None,
+            screen=screen_key_by_id.get(m["screen_id"]) if m["screen_id"] else None,
+            value=m["value"],
+            sample_size=m["sample_size"],
         )
         for level in metrics_by_level.values()
         for m in level
-        if m.value is not None and m.sample_size is not None
+        if m["value"] is not None and m["sample_size"] is not None
     ]
 
 

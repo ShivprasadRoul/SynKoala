@@ -253,6 +253,18 @@ export interface MetricsResponse {
   discoverability: Metric[];
 }
 
+export interface ParticipantRunRead {
+  id: string;
+  simulation_run_id: string;
+  participant_id: string | null;
+  status: string;
+  current_screen_id: string | null;
+  task_state: Record<string, unknown> | null;
+  final_outcome: Record<string, unknown> | null;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
 export interface HeatmapCell {
   screen_id: string | null;
   element_id: string | null;

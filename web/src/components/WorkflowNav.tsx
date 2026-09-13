@@ -9,11 +9,15 @@ import { listSimulationRuns } from "@/lib/api/simulations";
 import { listStimuli } from "@/lib/api/stimulus";
 import { listTasks } from "@/lib/api/tasks";
 
+// Stimulus before Task: a task's starting_point/success screen_key can only
+// reference a real analyzed screen (app/usecases/simulations.py's own
+// screen-key validation), so there's nothing to pick from until the
+// stimulus step has produced at least one analyzed screen.
 const STEPS = [
   { slug: "", label: "Overview" },
   { slug: "audience", label: "Audience" },
-  { slug: "task", label: "Task" },
   { slug: "stimulus", label: "Stimulus" },
+  { slug: "task", label: "Task" },
   { slug: "simulation", label: "Simulation" },
 ] as const;
 

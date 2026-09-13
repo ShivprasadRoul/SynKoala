@@ -9,8 +9,10 @@ import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { StatusBadge } from "@/components/ui/StatusBadge";
+import { listParticipants } from "@/lib/api/audiences";
 import {
   getInsights,
+  getParticipantRuns,
   getPixelHeatmap,
   getScanpaths,
   getSegments,
@@ -27,7 +29,14 @@ import {
   humanizeKey,
   metricLabel,
 } from "@/lib/metricLabels";
-import type { Screen } from "@/lib/types";
+import type { Participant, Screen } from "@/lib/types";
+
+function personaSummary(participant: Participant | undefined): string | null {
+  const persona = participant?.persona;
+  if (!persona) return null;
+  const confidence = Math.round(persona.context.digital_confidence * 100);
+  return `${persona.identity.name}, ${persona.identity.age} · ${persona.identity.occupation} · ${confidence}% digital confidence`;
+}
 
 const POLL_INTERVAL_MS = 3000;
 
@@ -153,6 +162,24 @@ function ScanpathsTab({ runId, studyId }: { runId: string; studyId: string }) {
     queryFn: () => listStimuli(studyId),
   });
   const screens = screenLookup(stimuli);
+  // Which persona this scanpath belongs to — a scanpath alone is just dots
+  // and clicks; knowing it's "Priya, 24, student, 30% digital confidence"
+  // is what makes a dead end or a fast completion legible as a finding
+  // rather than an anonymous trace.
+  const { data: participantRuns } = useQuery({
+    queryKey: ["participant-runs", runId],
+    queryFn: () => getParticipantRuns(runId),
+  });
+  const { data: participants } = useQuery({
+    queryKey: ["participants", studyId],
+    queryFn: () => listParticipants(studyId),
+  });
+  const participantByRunId = new Map(
+    (participantRuns ?? []).map((pr) => [
+      pr.id,
+      (participants ?? []).find((p) => p.id === pr.participant_id),
+    ]),
+  );
   const [selected, setSelected] = useState(0);
   // screen.width/height come back null for a screenshot upload (only a Figma
   // import extracts them) — the rendered <img>'s own natural size is the only
@@ -190,21 +217,37 @@ function ScanpathsTab({ runId, studyId }: { runId: string; studyId: string }) {
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap gap-2">
-        {scanpaths.map((p, index) => (
-          <button
-            key={p.participant_run_id}
-            type="button"
-            onClick={() => setSelected(index)}
-            className={`rounded-md px-3 py-1.5 text-[12px] font-medium transition-colors ${
-              index === selected
-                ? "bg-ink text-canvas"
-                : "bg-surface-2 text-ink-muted hover:bg-surface-1"
-            }`}
-          >
-            Participant {index + 1}
-          </button>
-        ))}
+        {scanpaths.map((p, index) => {
+          const persona = participantByRunId.get(p.participant_run_id)?.persona;
+          return (
+            <button
+              key={p.participant_run_id}
+              type="button"
+              onClick={() => setSelected(index)}
+              title={
+                personaSummary(participantByRunId.get(p.participant_run_id)) ??
+                undefined
+              }
+              className={`rounded-md px-3 py-1.5 text-[12px] font-medium transition-colors ${
+                index === selected
+                  ? "bg-ink text-canvas"
+                  : "bg-surface-2 text-ink-muted hover:bg-surface-1"
+              }`}
+            >
+              {persona ? persona.identity.name : `Participant ${index + 1}`}
+            </button>
+          );
+        })}
       </div>
+      {personaSummary(
+        participantByRunId.get(participant.participant_run_id),
+      ) && (
+        <p className="text-[13px] font-medium text-ink">
+          {personaSummary(
+            participantByRunId.get(participant.participant_run_id),
+          )}
+        </p>
+      )}
       <p className="text-[12px] text-ink-tertiary">
         Small dots are glances; numbered markers are the actions this
         participant actually took, in order.
@@ -429,7 +472,7 @@ function InsightsTab({ runId }: { runId: string }) {
     return (
       <EmptyState
         title="No insights yet"
-        description="An insight is only kept once its cited evidence clears a minimum sample size — with too few participants, none may pass, which is correct behavior, not a bug."
+        description="An insight is only kept once its cited evidence clears a minimum sample size — with too few participants, none may pass, which is correct behavior"
       />
     );
   }

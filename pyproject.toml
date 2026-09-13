@@ -17,6 +17,7 @@ dependencies = [
   "python-multipart>=0.0.12",
   "langgraph>=1.2.11",
   "pydantic-ai-slim[anthropic,openai]>=2.43.0",
+  "pillow>=12.3.0",
 ]
 
 [dependency-groups]

@@ -37,12 +37,15 @@ export default function StudyOverviewPage() {
     stimuli?.reduce((sum, s) => sum + s.screens.filter((sc) => sc.elements.length > 0).length, 0) ?? 0;
   const latestRun = runs?.at(-1);
 
+  // Stimulus before Task: a task's starting_point/success screen_key can
+  // only reference a real analyzed screen, so there's nothing to define a
+  // finish line against until the stimulus step has produced one.
   const nextStep = !audience
     ? { label: "Define your audience", href: `/studies/${id}/audience` }
-    : !tasks?.length
-      ? { label: "Define the critical task", href: `/studies/${id}/task` }
-      : !analyzedScreenCount
-        ? { label: "Import your stimulus", href: `/studies/${id}/stimulus` }
+    : !analyzedScreenCount
+      ? { label: "Import your stimulus", href: `/studies/${id}/stimulus` }
+      : !tasks?.length
+        ? { label: "Define the critical task", href: `/studies/${id}/task` }
         : !latestRun
           ? { label: "Publish & run a simulation", href: `/studies/${id}/simulation` }
           : { label: "View simulation results", href: `/studies/${id}/results/${latestRun.id}` };
@@ -80,17 +83,6 @@ export default function StudyOverviewPage() {
         />
 
         <SummaryCard
-          eyebrow="Task"
-          title={tasks?.length ? tasks[0].instruction : "Not defined yet"}
-          status={tasks?.length ? "done" : "empty"}
-          href={`/studies/${id}/task`}
-          cta={tasks?.length ? "View task" : "Define task"}
-          description={
-            tasks?.length ? "Goal-directed task" : "What should a participant accomplish?"
-          }
-        />
-
-        <SummaryCard
           eyebrow="Stimulus"
           title={
             stimuli?.length
@@ -104,6 +96,21 @@ export default function StudyOverviewPage() {
             stimuli?.length
               ? `${analyzedScreenCount} screen${analyzedScreenCount === 1 ? "" : "s"} analyzed`
               : "Import a Figma prototype or upload a screenshot."
+          }
+        />
+
+        <SummaryCard
+          eyebrow="Task"
+          title={tasks?.length ? tasks[0].instruction : "Not defined yet"}
+          status={tasks?.length ? "done" : "empty"}
+          href={`/studies/${id}/task`}
+          cta={tasks?.length ? "View task" : "Define task"}
+          description={
+            tasks?.length
+              ? "Goal-directed task"
+              : analyzedScreenCount > 0
+                ? "What should a participant accomplish?"
+                : "Import your stimulus first"
           }
         />
 

@@ -1,6 +1,8 @@
+import io
 import re
 import uuid
 
+from PIL import Image
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -36,6 +38,21 @@ def _slugify_filename(filename: str | None) -> str | None:
     stem = filename.rsplit(".", 1)[0]
     slug = re.sub(r"[^a-z0-9]+", "_", stem.lower()).strip("_")
     return slug or None
+
+
+def _image_dimensions(file_bytes: bytes) -> tuple[int, int] | None:
+    """Real pixel dimensions of the uploaded file — `screens.width`/`height`
+    used to be left null for every screenshot upload (only a Figma import
+    ever set them), which mattered more than it looked: `get_pixel_heatmap`'s
+    per-screen binning and the results UI's scanpath overlay both fall back to
+    a guessed 390x844 when these are null, silently misplacing every
+    coordinate on a screenshot of any other size. Cheap (`Image.open` reads
+    only the header, doesn't decode pixels) and never model-dependent."""
+    try:
+        with Image.open(io.BytesIO(file_bytes)) as image:
+            return image.size
+    except Exception:
+        return None
 
 
 def _infer_interactable(element_type: str, properties: dict) -> bool:
@@ -94,8 +111,15 @@ class StimulusService:
             screen_key = await self._unique_screen_key(
                 study_id, _slugify_filename(original_filename) or "screen"
             )
+            dimensions = _image_dimensions(file_bytes)
             self._session.add(
-                ScreenModel(stimulus_id=stimulus.id, screen_key=screen_key, image_url=stored_path)
+                ScreenModel(
+                    stimulus_id=stimulus.id,
+                    screen_key=screen_key,
+                    image_url=stored_path,
+                    width=dimensions[0] if dimensions else None,
+                    height=dimensions[1] if dimensions else None,
+                )
             )
             await self._session.flush()
 

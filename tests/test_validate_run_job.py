@@ -17,9 +17,20 @@ class _FakeSession:
 
 
 def _metric(level, metric, value, element_id=None, sample_size=10):
-    return Mock(
-        level=level, metric=metric, value=value, element_id=element_id, sample_size=sample_size
-    )
+    # A plain dict, not a Mock — ResultsService.get_metrics really returns
+    # dicts (element_key/screen_key enrichment, planning/09), and this test
+    # fixture using attribute-style Mocks instead is exactly what let
+    # validate_run.py's own attribute access (`m.metric`) drift out of sync
+    # with the real contract without any test catching it.
+    return {
+        "id": uuid.uuid4(),
+        "level": level,
+        "metric": metric,
+        "element_id": element_id,
+        "screen_id": None,
+        "value": value,
+        "sample_size": sample_size,
+    }
 
 
 def _metrics_response(completion_rate, click_rates=None, attention_shares=None):

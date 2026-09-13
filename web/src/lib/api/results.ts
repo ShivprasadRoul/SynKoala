@@ -2,12 +2,17 @@ import { apiFetch } from "../apiClient";
 import type {
   HeatmapCell,
   InsightRead,
+  ParticipantRunRead,
   PathRead,
   PixelHeatmapCell,
   ScanpathRead,
   SegmentResultRead,
   ValidationResponse,
 } from "../types";
+
+export function getParticipantRuns(runId: string) {
+  return apiFetch<ParticipantRunRead[]>(`/simulations/${runId}/participants`);
+}
 
 export function getHeatmap(runId: string) {
   return apiFetch<HeatmapCell[]>(`/simulations/${runId}/heatmap`);

@@ -1,6 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useState } from "react";
 
@@ -300,6 +301,30 @@ export default function TaskPage() {
 
   if (isLoading)
     return <p className="text-[14px] text-ink-muted">Loading tasks…</p>;
+
+  // A task's starting_point/success screen_key can only reference a real
+  // analyzed screen — there's nothing to define a finish line against until
+  // the stimulus step has produced at least one, so defining a first task
+  // is blocked until then rather than accepting free text that later turns
+  // out not to match anything real.
+  if ((!tasks || tasks.length === 0) && screenKeys.length === 0) {
+    return (
+      <Card className="mx-auto max-w-md text-center">
+        <CardTitle>Import your stimulus first</CardTitle>
+        <CardDescription className="mt-2">
+          A task&apos;s starting point and success condition both reference a real analyzed
+          screen — there&apos;s nothing to pick from until at least one screen has been
+          imported and analyzed.
+        </CardDescription>
+        <Link
+          href={`/studies/${studyId}/stimulus`}
+          className="mt-4 inline-flex rounded-md bg-primary px-4 py-2 text-[14px] font-semibold text-on-primary transition-colors hover:bg-primary-strong"
+        >
+          Go to Stimulus →
+        </Link>
+      </Card>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-6">

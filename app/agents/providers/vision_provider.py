@@ -95,7 +95,9 @@ class ScreenRoleInference(BaseModel):
 
 @runtime_checkable
 class VisionProvider(Protocol):
-    async def analyze_screen(self, image: bytes, content_type: str) -> ScreenAnalysis: ...
+    async def analyze_screen(
+        self, image: bytes, content_type: str, image_size: tuple[int, int] | None = None
+    ) -> ScreenAnalysis: ...
 
     async def infer_transitions(self, screens: list[ScreenSummary]) -> ScreenGraphInference: ...
 
@@ -111,6 +113,20 @@ _ANALYZE_SYSTEM_PROMPT = (
     "purpose (e.g. primary_action, search, navigation, help, confirmation, info); and "
     "whether a user could interact with it (interactable). Only report elements you can "
     "actually see — do not invent elements."
+)
+
+# Vision models commonly resize a large image internally before "seeing" it,
+# so a bbox reported without an explicit frame of reference can land in
+# whatever resolution the model happened to downscale to — not the original
+# file's real pixel grid. Every downstream consumer (the Simulation Engine's
+# _sample_point_in_bbox, the results UI's heatmap/scanpath overlays) treats
+# bbox as absolute pixels in the ORIGINAL upload's coordinate space (now
+# captured at upload time, StimulusService._image_dimensions), so the model
+# needs to be told that exact frame explicitly rather than left to guess it.
+_IMAGE_SIZE_PROMPT_TEMPLATE = (
+    "This screenshot is exactly {width}x{height} pixels. Report every bounding box in "
+    "that exact pixel coordinate space — x from 0 to {width}, y from 0 to {height} — "
+    "not the resolution you may internally perceive the image at."
 )
 
 _TRANSITIONS_SYSTEM_PROMPT = (
@@ -167,11 +183,16 @@ class PydanticAIVisionProvider:
     def __init__(self, model: str | None = None) -> None:
         self._model = model or settings.vision_model
 
-    async def analyze_screen(self, image: bytes, content_type: str) -> ScreenAnalysis:
+    async def analyze_screen(
+        self, image: bytes, content_type: str, image_size: tuple[int, int] | None = None
+    ) -> ScreenAnalysis:
         agent = Agent(self._model, output_type=ScreenAnalysis, system_prompt=_ANALYZE_SYSTEM_PROMPT)
-        result = await agent.run(
-            ["Analyze this screen.", BinaryContent(data=image, media_type=content_type)]
-        )
+        prompt: list[object] = ["Analyze this screen."]
+        if image_size is not None:
+            width, height = image_size
+            prompt.append(_IMAGE_SIZE_PROMPT_TEMPLATE.format(width=width, height=height))
+        prompt.append(BinaryContent(data=image, media_type=content_type))
+        result = await agent.run(prompt)
         return result.output
 
     async def infer_transitions(self, screens: list[ScreenSummary]) -> ScreenGraphInference:
