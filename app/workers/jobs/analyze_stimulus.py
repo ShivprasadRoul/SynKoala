@@ -9,6 +9,8 @@ from app.agents.providers.vision_provider import (
     ScreenAnalysis,
     ScreenElementSummary,
     ScreenGraphInference,
+    ScreenRole,
+    ScreenRoleInference,
     ScreenSummary,
 )
 from app.core.errors import LifecycleError
@@ -49,8 +51,72 @@ def _screen_summary(screen: ScreenModel) -> ScreenSummary:
     )
 
 
+def _resolve_screen_roles(
+    screens: list[ScreenModel], inferred: list[ScreenRole]
+) -> dict[str, dict]:
+    """Validates `classify_screens` output against the real screens, applying the
+    same "never trust what the model can't back up" rule `_resolve_transitions`
+    uses: a `screen_key` or `duplicate_of` naming a screen that doesn't exist is
+    dropped rather than persisted.
+
+    `duplicate_of` may only point *backwards* in upload order. That's what makes
+    the collapse well-defined — it can't cycle, every chain terminates at an
+    earliest screen, and which twin survives doesn't depend on which order the
+    model happened to list them in. `entry`/`success` are each unique by
+    construction: if the model marks several, the earliest-uploaded wins for
+    `entry` and the latest for `success`, since that is where each actually sits
+    in a flow."""
+    order = {screen.screen_key: index for index, screen in enumerate(screens)}
+    roles: dict[str, dict] = {}
+    for reported in inferred:
+        if reported.screen_key not in order:
+            logger.warning("classify_screens: unknown screen_key %s", reported.screen_key)
+            continue
+        duplicate_of = reported.duplicate_of
+        if duplicate_of is not None and (
+            duplicate_of not in order or order[duplicate_of] >= order[reported.screen_key]
+        ):
+            logger.warning(
+                "classify_screens: dropping duplicate_of %s -> %s (unknown or not earlier)",
+                reported.screen_key,
+                duplicate_of,
+            )
+            duplicate_of = None
+        roles[reported.screen_key] = {
+            "summary": reported.summary,
+            "role": reported.role,
+            "duplicate_of": duplicate_of,
+        }
+
+    for role_name, keep in (("entry", min), ("success", max)):
+        claimants = [key for key, role in roles.items() if role["role"] == role_name]
+        if len(claimants) > 1:
+            winner = keep(claimants, key=lambda key: order[key])
+            for key in claimants:
+                if key != winner:
+                    roles[key]["role"] = "step"
+    return roles
+
+
+def _canonical_screen_keys(roles: dict[str, dict]) -> dict[str, str]:
+    """`screen_key -> the key it collapses onto`, following `duplicate_of`
+    chains to their root. Terminates because `_resolve_screen_roles` only
+    admits backwards-pointing links."""
+    canonical: dict[str, str] = {}
+    for key in roles:
+        seen = {key}
+        current = key
+        while (parent := roles.get(current, {}).get("duplicate_of")) and parent not in seen:
+            seen.add(parent)
+            current = parent
+        canonical[key] = current
+    return canonical
+
+
 def _resolve_transitions(
-    screens: list[ScreenModel], inferred: list[InferredTransition]
+    screens: list[ScreenModel],
+    inferred: list[InferredTransition],
+    canonical: dict[str, str] | None = None,
 ) -> list[dict]:
     """Maps the model's `(screen_key, element_key)` references back onto real
     rows, dropping anything that doesn't resolve — the model is asked never to
@@ -65,7 +131,19 @@ def _resolve_transitions(
     Without this, `execute_action`'s `next(... for t in transitions_from(...))`
     would pick whichever of several contradictory edges Postgres happened to
     return first — undefined, and not reproducible run-to-run for the same
-    participant/seed (PRD §7)."""
+    participant/seed (PRD §7).
+
+    `canonical` collapses duplicate screens (see `_resolve_screen_roles`) as
+    edges are resolved: both endpoints are remapped onto the surviving twin, so
+    an edge arriving at one twin and an edge leaving the other end up on the
+    same node instead of severing the flow between them. The trigger is
+    re-looked-up by `element_key` on the surviving screen, because
+    `execute_action` matches transitions against elements of the screen the
+    participant is actually standing on — an edge whose trigger has no
+    counterpart there could never fire, so it's dropped rather than persisted.
+    An edge that collapses onto a self-loop is dropped too: it described
+    movement between two renderings of one screen, which is not navigation."""
+    canonical = canonical or {}
     screens_by_key = {screen.screen_key: screen for screen in screens}
     elements_by_screen_and_key = {
         (screen.screen_key, element.element_key): element
@@ -75,10 +153,14 @@ def _resolve_transitions(
     transitions: list[dict] = []
     seen_triggers: dict[tuple[uuid.UUID, uuid.UUID], uuid.UUID] = {}
     for edge in inferred:
-        from_screen = screens_by_key.get(edge.from_screen_key)
-        to_screen = screens_by_key.get(edge.to_screen_key)
-        trigger_element = elements_by_screen_and_key.get((edge.from_screen_key, edge.element_key))
+        from_key = canonical.get(edge.from_screen_key, edge.from_screen_key)
+        to_key = canonical.get(edge.to_screen_key, edge.to_screen_key)
+        from_screen = screens_by_key.get(from_key)
+        to_screen = screens_by_key.get(to_key)
+        trigger_element = elements_by_screen_and_key.get((from_key, edge.element_key))
         if from_screen is None or to_screen is None or trigger_element is None:
+            continue
+        if from_screen.id == to_screen.id:
             continue
         trigger_key = (from_screen.id, trigger_element.id)
         existing_destination = seen_triggers.get(trigger_key)
@@ -139,8 +221,27 @@ async def handle_analyze_stimulus(session: AsyncSession, payload: dict) -> None:
     if len(study_screens) < 2:
         return  # nothing to connect yet
 
+    summaries = [_screen_summary(screen) for screen in study_screens]
+
+    # Classify before inferring the graph: which screens are really one screen
+    # decides which nodes the transitions may land on, and the entry/success
+    # roles are what the task builder prefills a flow's start and finish line
+    # from (planning/05-stimulus-engine.md).
+    classification: ScreenRoleInference = await provider.classify_screens(summaries)
+    roles = _resolve_screen_roles(study_screens, classification.screens)
+    await stimuli.save_screen_roles(study_screens, roles)
+    canonical = _canonical_screen_keys(roles)
+
+    # Infer the graph over the surviving screens only. Shown every twin, the
+    # model spends its edges describing the step between two renderings of one
+    # screen ("unfilled -> filled") instead of the step to the next real screen,
+    # which is how a flow ends up severed. Collapsing first means each node it
+    # sees is a distinct state a user can actually be in.
+    surviving = [
+        screen for screen in study_screens if canonical.get(screen.screen_key) == screen.screen_key
+    ]
     inference: ScreenGraphInference = await provider.infer_transitions(
-        [_screen_summary(screen) for screen in study_screens]
+        [_screen_summary(screen) for screen in surviving]
     )
-    transitions = _resolve_transitions(study_screens, inference.transitions)
+    transitions = _resolve_transitions(study_screens, inference.transitions, canonical)
     await stimuli.replace_transitions_for_study(stimulus.study_id, transitions)

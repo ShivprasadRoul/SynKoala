@@ -2,21 +2,36 @@ import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agents.graphs.simulation_graph import has_recognized_success_condition
 from app.core.errors import LifecycleError, NotFoundError
 from app.db.models import ParticipantRecordModel, SimulationRunModel, TaskModel, UserModel
 from app.services.audience_service import AudienceService
 from app.services.job_service import JobService
+from app.services.results_service import ResultsService
 from app.services.simulation_run_service import SimulationRunService
 from app.services.stimulus_service import StimulusService
 from app.services.study_service import StudyService
 from app.services.task_service import TaskService
 
+_TERMINAL_RUN_STATUSES = ("COMPLETED", "FAILED", "CANCELLED")
+
+
+def task_has_finish_line(task: TaskModel) -> bool:
+    """Without either a recognized success condition or expected critical
+    actions, `update_state` (app/agents/graphs/simulation_graph.py) caps
+    task_progress at 0.9 by exploration alone, so no participant can ever
+    reach COMPLETED — shared by `create_run` and `publish` so a study can't
+    reach either path with a task guaranteed to produce a 100% drop-off."""
+    return bool(
+        has_recognized_success_condition(task.success_conditions) or task.expected_critical_actions
+    )
+
 
 class SimulationUseCase:
     """Orchestration for the Simulation resource (planning/02-api.md /
     planning/06-study-orchestrator.md). Composes StudyService, TaskService,
-    AudienceService, StimulusService, SimulationRunService, and JobService —
-    fans out one simulate_participant job per participant (LLD §19)."""
+    AudienceService, StimulusService, SimulationRunService, ResultsService, and
+    JobService — fans out one simulate_participant job per participant (LLD §19)."""
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
@@ -25,6 +40,7 @@ class SimulationUseCase:
         self._audiences = AudienceService(session)
         self._stimuli = StimulusService(session)
         self._runs = SimulationRunService(session)
+        self._results = ResultsService(session)
         self._jobs = JobService(session)
 
     async def _resolve_task(self, study_id: uuid.UUID, task_id: uuid.UUID | None) -> TaskModel:
@@ -51,27 +67,40 @@ class SimulationUseCase:
         self,
         user: UserModel,
         study_id: uuid.UUID,
-        population_size: int,
+        population_size: int | None,
         task_id: uuid.UUID | None,
         config: dict | None,
         seed: int | None,
     ) -> SimulationRunModel:
         study = await self._studies.get_owned(user, study_id)
-        # READY: the common case, first run. RUNNING/COMPLETED: a *later* run
-        # for the same study — required, not just tolerated: run_stability_cv
-        # (planning/10) needs >= 5 repeated runs of the same config, and
-        # baseline comparisons (random/saliency_only/task_only) are each their
-        # own run against the same study. `create_run` itself is what moves a
-        # study to RUNNING, and `STUDY_STATUS_TRANSITIONS` has no path back
-        # from RUNNING/COMPLETED to READY — gating on `== "READY"` here would
-        # make a second-ever run for any study permanently impossible. Each
-        # run's own lifecycle is already independently tracked on
-        # `simulation_runs.status`; the study-level status is about setup
-        # readiness, not "has a run ever happened yet."
+        # READY: the common case, first run. RUNNING/COMPLETED: legacy values a
+        # study's status could already carry from before study-level status
+        # stopped being mutated by run creation (see the note below) — still
+        # honored so an old row isn't suddenly unrunnable. Each run's own
+        # lifecycle lives on `simulation_runs.status`; study status is about
+        # setup readiness (DRAFT/READY), not "has a run ever happened" —
+        # run_stability_cv (planning/10, >= 5 repeated runs) and baseline
+        # comparisons both depend on a study accepting more than one run.
         if study.status not in ("READY", "RUNNING", "COMPLETED"):
             raise LifecycleError(
                 f"Study {study_id} must be READY before a simulation can be started "
                 f"(currently {study.status})"
+            )
+        if population_size is None:
+            population_size = study.population_size
+        if population_size is None:
+            raise LifecycleError(
+                f"Study {study_id} has no configured sample size — set one on the "
+                "study or pass population_size explicitly"
+            )
+        existing_runs = await self._runs.list_by_study(study_id)
+        active_run = next(
+            (r for r in existing_runs if r.status not in _TERMINAL_RUN_STATUSES), None
+        )
+        if active_run is not None:
+            raise LifecycleError(
+                f"Study {study_id} already has a run in progress ({active_run.id}, "
+                f"{active_run.status}) — wait for it to finish before starting another"
             )
         if not await self._stimuli.has_analyzed_screens(study_id):
             raise LifecycleError(
@@ -79,6 +108,12 @@ class SimulationUseCase:
                 "run POST /studies/:id/stimulus/analyze first"
             )
         task = await self._resolve_task(study_id, task_id)
+        if not task_has_finish_line(task):
+            raise LifecycleError(
+                f"Task {task.id} has no finish line — set success_conditions "
+                "(screen_key, element_key or semantic_role) or "
+                "expected_critical_actions, otherwise no participant can complete it"
+            )
         participants = await self._resolve_participants(study_id)
         if population_size > len(participants):
             raise LifecycleError(
@@ -103,9 +138,48 @@ class SimulationUseCase:
                 },
             )
 
-        await self._studies.update(study, status="RUNNING")
+        # A study's status is no longer flipped to RUNNING/COMPLETED/FAILED by
+        # run creation/completion — that conflated "is this study's setup
+        # done" with "what did the latest run do," and made a study parked at
+        # RUNNING forever once any run started (nothing ever moved it off
+        # RUNNING, since finalize_run only ever touched simulation_runs.status).
+        # A study's own lifecycle now only ever reaches READY via `publish`;
+        # every run's actual state lives solely on `simulation_runs.status`,
+        # queried per run or via `list_runs`/`get_progress`.
         await self._session.commit()
         return run
+
+    async def publish(self, user: UserModel, study_id: uuid.UUID) -> SimulationRunModel:
+        """DRAFT -> READY plus the study's first simulation run, as one
+        transaction. `create_run` below does its own `flush()`-only work until
+        its final `commit()` — nothing here commits before that point, so a
+        study transitioned to READY and then a raised LifecycleError (missing
+        audience/task/finish-line/analyzed stimulus) or a mid-flight DB error
+        both roll back the whole attempt together: the study lands back at
+        exactly DRAFT with no dangling run row, never "published but the run
+        failed to start." `create_run` itself is reused verbatim rather than
+        duplicated — every readiness rule it already enforces (analyzed
+        stimulus, a task with a finish line, a generated audience) applies
+        here for free, with the same specific, actionable error messages."""
+        study = await self._studies.get_owned(user, study_id)
+        if study.status != "DRAFT":
+            raise LifecycleError(f"Study {study_id} is already published")
+        if study.population_size is None:
+            raise LifecycleError("Set a sample size for this study before publishing")
+        study = await self._studies.update(study, status="READY")
+        return await self.create_run(
+            user, study_id, population_size=None, task_id=None, config=None, seed=None
+        )
+
+    async def list_runs(self, user: UserModel, study_id: uuid.UUID) -> list[dict]:
+        """A study's run history (planning/02-api.md's `GET /studies/:id/
+        simulations`), oldest first — each run's completion_rate is looked up
+        in one batched query rather than N, since a study can accumulate many
+        runs (run_stability_cv alone wants >= 5)."""
+        await self._studies.get_owned(user, study_id)  # ownership + 404
+        runs = await self._runs.list_by_study(study_id)
+        rates = await self._results.get_completion_rates([run.id for run in runs])
+        return [{"run": run, "completion_rate": rates.get(run.id)} for run in runs]
 
     async def get_run(self, user: UserModel, run_id: uuid.UUID) -> SimulationRunModel:
         run = await self._runs.get_by_id(run_id)

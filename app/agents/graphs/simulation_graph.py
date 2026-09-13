@@ -59,9 +59,11 @@ Outcome = Literal["IN_PROGRESS", "COMPLETED", "FAILED", "ABANDONED"]
 
 # How many gaze samples a persona gets, on one screen, to happen to land on
 # that screen's own "intended element" (see _intended_element_for_screen)
-# before the whole run is treated as a drop-off. Deliberately small and
-# legible rather than an elaborate eye-tracking model — see chat.
-MAX_SCAN_ATTEMPTS = 4
+# before the whole run is treated as a drop-off. A rescan loops attend->attend
+# without reaching execute_action, so this budget costs recursion headroom but
+# never `step` budget — it's priced to make a drop-off on the very first screen
+# rare, since a real user abandoning before a single interaction is unusual.
+MAX_SCAN_ATTEMPTS = 10
 
 
 class SimulationState(TypedDict):
@@ -199,7 +201,7 @@ def _find_element(screen_graph: ScreenGraph, target: str | None) -> ElementView 
     return None
 
 
-def _has_recognized_success_condition(success_conditions: dict | None) -> bool:
+def has_recognized_success_condition(success_conditions: dict | None) -> bool:
     """Only `screen_key`/`element_key`/`semantic_role` are given real evaluation
     semantics below — `success_conditions` is a freeform JSONB column with no
     defined shape anywhere else in this codebase (planning/12-web-app.md's own
@@ -223,7 +225,7 @@ def _success_condition_met(
     `expected_critical_actions`, which are milestones *toward* completion, not
     completion itself (see `update_state`'s docstring below). Any one
     recognized key present and satisfied is sufficient (OR semantics)."""
-    if not _has_recognized_success_condition(success_conditions):
+    if not has_recognized_success_condition(success_conditions):
         return False
 
     target_screen_key = success_conditions.get("screen_key")
@@ -525,7 +527,7 @@ async def update_state(state: SimulationState, config: RunnableConfig) -> dict:
     screen_graph = state["screen_graph"]
     task = state["task"]
     critical = set(task.expected_critical_actions or [])
-    has_success_condition = _has_recognized_success_condition(task.success_conditions)
+    has_success_condition = has_recognized_success_condition(task.success_conditions)
 
     if has_success_condition and _success_condition_met(
         screen_graph, task.success_conditions, state["current_screen_id"], state["action_history"]

@@ -425,47 +425,56 @@ export default function AudiencePage() {
         <CardTitle className="mt-1.5">Synthetic users</CardTitle>
         <CardDescription className="mt-1">
           SynKoala generates individual users from your audience — each one an independent sample
-          from its distribution, not a copy of it. Repeatable — each call adds more, it
-          doesn&apos;t replace the existing population.
+          from its distribution, not a copy of it. Generated once per study, from its configured
+          sample size — so every simulation run draws from the same fixed population.
         </CardDescription>
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            generateMutation.mutate();
-          }}
-          className="mt-4 flex flex-wrap items-end gap-4"
-        >
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="population-size">Population size</Label>
-            <Input
-              id="population-size"
-              type="number"
-              min={1}
-              max={1000}
-              className="w-32"
-              value={populationSize}
-              onChange={(e) => setPopulationSizeOverride(Number(e.target.value))}
-            />
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="seed">Seed (optional)</Label>
-            <Input
-              id="seed"
-              type="number"
-              className="w-32"
-              value={seed}
-              onChange={(e) => setSeed(e.target.value)}
-            />
-          </div>
-          <Button type="submit" disabled={generateMutation.isPending}>
-            {generateMutation.isPending ? "Generating…" : "Generate Personas"}
-          </Button>
-        </form>
-        {generateMutation.isError && (
-          <p className="mt-3 text-[13px] text-semantic-warn">
-            {generateMutation.error instanceof Error
-              ? generateMutation.error.message
-              : "Failed to generate personas"}
+        {!participants || participants.length === 0 ? (
+          <>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                generateMutation.mutate();
+              }}
+              className="mt-4 flex flex-wrap items-end gap-4"
+            >
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="population-size">Population size</Label>
+                <Input
+                  id="population-size"
+                  type="number"
+                  min={1}
+                  max={1000}
+                  className="w-32"
+                  value={populationSize}
+                  onChange={(e) => setPopulationSizeOverride(Number(e.target.value))}
+                />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="seed">Seed (optional)</Label>
+                <Input
+                  id="seed"
+                  type="number"
+                  className="w-32"
+                  value={seed}
+                  onChange={(e) => setSeed(e.target.value)}
+                />
+              </div>
+              <Button type="submit" disabled={generateMutation.isPending}>
+                {generateMutation.isPending ? "Generating…" : "Generate Personas"}
+              </Button>
+            </form>
+            {generateMutation.isError && (
+              <p className="mt-3 text-[13px] text-semantic-warn">
+                {generateMutation.error instanceof Error
+                  ? generateMutation.error.message
+                  : "Failed to generate personas"}
+              </p>
+            )}
+          </>
+        ) : (
+          <p className="mt-4 text-[13px] text-ink-tertiary">
+            This study&apos;s population is generated — delete the study and start over to
+            regenerate it with a different size or seed.
           </p>
         )}
         {participants && participants.length > 0 && (

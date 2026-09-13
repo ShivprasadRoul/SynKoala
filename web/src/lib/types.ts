@@ -219,11 +219,29 @@ export interface SimulationRun {
   created_at: string;
 }
 
+// One row of a study's run history (GET /studies/:id/simulations) — enough to
+// render a run list without a per-run detail fetch. Runs are append-only, so
+// "Run #N" is this array's own position (oldest first), not a stored field.
+export interface SimulationRunSummary {
+  id: string;
+  status: SimulationRunStatus;
+  population_size: number;
+  source: string;
+  seed: number | null;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  completion_rate: number | null;
+}
+
 export interface Metric {
   id: string;
   level: "task_success" | "friction" | "discoverability";
   metric: string;
   element_id: string | null;
+  screen_id: string | null;
+  element_key: string | null;
+  screen_key: string | null;
   segment: string | null;
   value: number | null;
   sample_size: number | null;
@@ -233,6 +251,74 @@ export interface MetricsResponse {
   task_success: Metric[];
   friction: Metric[];
   discoverability: Metric[];
+}
+
+export interface HeatmapCell {
+  screen_id: string | null;
+  element_id: string | null;
+  intensity: number;
+  fixation_count: number;
+}
+
+export interface PathRead {
+  participant_run_id: string;
+  screens: string[];
+}
+
+export interface PixelHeatmapCell {
+  screen_id: string;
+  x: number;
+  y: number;
+  intensity: number;
+}
+
+export interface ScanpathStep {
+  sequence_no: number;
+  type: string;
+  screen_id: string | null;
+  element_id: string | null;
+  x: number | null;
+  y: number | null;
+  duration_ms: number | null;
+  scan_number: number | null;
+}
+
+export interface ScanpathRead {
+  participant_run_id: string;
+  path: ScanpathStep[];
+}
+
+export interface SegmentResultRead {
+  id: string;
+  segment: string;
+  metric: string;
+  value: number | null;
+  sample_size: number | null;
+}
+
+export interface ValidationResultRead {
+  id: string;
+  metric: string;
+  comparison: string;
+  value: number | null;
+  sample_size: number | null;
+  human_benchmark_id: string | null;
+}
+
+export interface ValidationResponse {
+  status: string;
+  results: ValidationResultRead[];
+}
+
+export interface InsightRead {
+  id: string;
+  title: string;
+  severity: string;
+  summary: string;
+  affected_segments: string[] | null;
+  recommendation: string | null;
+  evidence_strength: Record<string, unknown> | null;
+  created_at: string;
 }
 
 export interface ApiErrorEnvelope {

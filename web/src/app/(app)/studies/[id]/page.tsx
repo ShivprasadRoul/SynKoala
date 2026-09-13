@@ -6,6 +6,7 @@ import { useParams } from "next/navigation";
 
 import { SummaryCard } from "@/components/ui/SummaryCard";
 import { getAudience } from "@/lib/api/audiences";
+import { listSimulationRuns } from "@/lib/api/simulations";
 import { listStimuli } from "@/lib/api/stimulus";
 import { getStudy } from "@/lib/api/studies";
 import { listTasks } from "@/lib/api/tasks";
@@ -13,23 +14,28 @@ import type { AudienceDefinition, TraitBand } from "@/lib/types";
 
 const TRAIT_LABEL: Record<TraitBand, string> = { low: "Low", medium: "Medium", high: "High" };
 
-// A study's overall lifecycle status (not per-run) is the only simulation
-// signal available client-side — there's no endpoint listing a study's runs —
-// so this is an honest proxy, not a fabricated count.
-const RUN_STARTED_STATUSES = new Set(["RUNNING", "COMPLETED", "FAILED"]);
-
 export default function StudyOverviewPage() {
   const { id } = useParams<{ id: string }>();
   const { data: study } = useQuery({ queryKey: ["study", id], queryFn: () => getStudy(id) });
   const { data: audience } = useQuery({ queryKey: ["audience", id], queryFn: () => getAudience(id) });
   const { data: tasks } = useQuery({ queryKey: ["tasks", id], queryFn: () => listTasks(id) });
   const { data: stimuli } = useQuery({ queryKey: ["stimuli", id], queryFn: () => listStimuli(id) });
+  // The study's own status (DRAFT/READY) is setup readiness only — what the
+  // Simulation card shows is the *latest run's* status, kept deliberately
+  // separate so a study never reads as permanently "Running" just because
+  // one historical run is (planning handover: "study status and run status
+  // should remain conceptually separate").
+  const { data: runs } = useQuery({
+    queryKey: ["simulationRuns", id],
+    queryFn: () => listSimulationRuns(id),
+  });
 
   if (!study) return null;
 
   const definition = audience?.definition as AudienceDefinition | undefined;
   const analyzedScreenCount =
     stimuli?.reduce((sum, s) => sum + s.screens.filter((sc) => sc.elements.length > 0).length, 0) ?? 0;
+  const latestRun = runs?.at(-1);
 
   const nextStep = !audience
     ? { label: "Define your audience", href: `/studies/${id}/audience` }
@@ -37,7 +43,9 @@ export default function StudyOverviewPage() {
       ? { label: "Define the critical task", href: `/studies/${id}/task` }
       : !analyzedScreenCount
         ? { label: "Import your stimulus", href: `/studies/${id}/stimulus` }
-        : { label: "Run a simulation", href: `/studies/${id}/simulation` };
+        : !latestRun
+          ? { label: "Publish & run a simulation", href: `/studies/${id}/simulation` }
+          : { label: "View simulation results", href: `/studies/${id}/results/${latestRun.id}` };
 
   return (
     <div className="flex flex-col gap-6">
@@ -101,16 +109,18 @@ export default function StudyOverviewPage() {
 
         <SummaryCard
           eyebrow="Simulation"
-          title={RUN_STARTED_STATUSES.has(study.status) ? study.status : "Not run yet"}
+          title={
+            latestRun
+              ? `Run #${runs?.length ?? 0} — ${latestRun.status}`
+              : study.status === "READY"
+                ? "Published, not run yet"
+                : "Not run yet"
+          }
           status={
-            study.status === "COMPLETED"
-              ? "done"
-              : RUN_STARTED_STATUSES.has(study.status)
-                ? "pending"
-                : "empty"
+            latestRun?.status === "COMPLETED" ? "done" : latestRun ? "pending" : "empty"
           }
           href={`/studies/${id}/simulation`}
-          cta="Go to simulation"
+          cta={latestRun ? "View simulation runs" : "Go to simulation"}
           description={`${study.population_size ?? "No"} synthetic users configured`}
         />
       </div>

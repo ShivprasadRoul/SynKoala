@@ -140,3 +140,27 @@ async def test_finalize_run_and_notify_skips_finalize_while_participants_remain(
 
     fake_runs.finalize_run.assert_not_awaited()
     fake_jobs.enqueue.assert_not_awaited()
+
+
+async def test_finalize_run_and_notify_locks_the_run_before_checking_completeness():
+    """The bug this closes, reproduced directly against a real deployment: with
+    NUM_WORKERS participants finishing at once, each in its own transaction, two
+    jobs could both call is_run_complete before either's own terminal write had
+    committed — both saw "not complete" and the run never finalized, stuck at
+    RUNNING forever despite every participant being terminal. Locking the run
+    row first serializes concurrent finalize attempts so each recheck is
+    guaranteed to see every previously-committed sibling."""
+    run_id = uuid.uuid4()
+    fake_runs = _fake_runs_service()
+    fake_runs.is_run_complete.return_value = False
+    fake_runs.get_by_id.return_value = Mock(status="RUNNING")
+    fake_jobs = AsyncMock()
+
+    call_order = []
+    fake_runs.lock_for_finalize.side_effect = lambda *a, **kw: call_order.append("lock")
+    fake_runs.is_run_complete.side_effect = lambda *a, **kw: call_order.append("check") or False
+
+    await job_module._finalize_run_and_notify(_FakeSession(), fake_runs, fake_jobs, run_id)
+
+    fake_runs.lock_for_finalize.assert_awaited_once_with(run_id)
+    assert call_order == ["lock", "check"]

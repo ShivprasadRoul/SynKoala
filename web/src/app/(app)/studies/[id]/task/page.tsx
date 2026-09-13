@@ -5,12 +5,14 @@ import { useParams } from "next/navigation";
 import { useState } from "react";
 
 import { getBenchmark, uploadBenchmark } from "@/lib/api/benchmark";
+import { listStimuli } from "@/lib/api/stimulus";
 import { createTask, listTasks, updateTask } from "@/lib/api/tasks";
-import type { Task } from "@/lib/types";
+import type { Stimulus, Task } from "@/lib/types";
 
 import { Button } from "@/components/ui/Button";
 import { Card, CardDescription, CardTitle } from "@/components/ui/Card";
 import { Input, Label, Textarea } from "@/components/ui/Input";
+import { Select } from "@/components/ui/Select";
 
 // "cart_button, checkout_button" -> ["cart_button", "checkout_button"]; empty
 // input -> null (not []), so a task that never set this looks the same as one
@@ -23,6 +25,51 @@ function parseCriticalActions(raw: string): string[] | null {
   return actions.length > 0 ? actions : null;
 }
 
+// The task's finish line. Only these three keys are given evaluation semantics
+// by the Simulation Engine (`has_recognized_success_condition`); a task with
+// neither this nor critical actions can never reach task_progress 1.0, so
+// `POST /simulations` rejects it rather than run a guaranteed 100% drop-off.
+const SUCCESS_KEYS = [
+  { value: "screen_key", label: "Reaches screen" },
+  { value: "element_key", label: "Interacts with element" },
+  { value: "semantic_role", label: "Interacts with role" },
+] as const;
+
+type SuccessKey = (typeof SUCCESS_KEYS)[number]["value"];
+
+function parseSuccessConditions(key: SuccessKey, raw: string): Record<string, string> | null {
+  const value = raw.trim();
+  return value ? { [key]: value } : null;
+}
+
+function readSuccessConditions(task: Task): { key: SuccessKey; value: string } {
+  for (const { value: key } of SUCCESS_KEYS) {
+    const existing = task.success_conditions?.[key];
+    if (typeof existing === "string") return { key, value: existing };
+  }
+  return { key: "screen_key", value: "" };
+}
+
+// The Stimulus Engine classifies every analyzed screen's role in the flow
+// (`classify_screens`, stored on screens.analysis.flow). Reading the entry and
+// success screens back here is what lets the task builder propose a start and
+// finish line instead of making the researcher recall screen keys by hand.
+function detectedFlowScreens(stimuli: Stimulus[] | undefined): {
+  entry: string | null;
+  success: string | null;
+} {
+  let entry: string | null = null;
+  let success: string | null = null;
+  for (const stimulus of stimuli ?? []) {
+    for (const screen of stimulus.screens ?? []) {
+      const flow = screen.analysis?.flow as { role?: string } | undefined;
+      if (flow?.role === "entry") entry = screen.screen_key;
+      if (flow?.role === "success") success = screen.screen_key;
+    }
+  }
+  return { entry, success };
+}
+
 function TaskEditForm({ task, onDone }: { task: Task; onDone: () => void }) {
   const queryClient = useQueryClient();
   const [instruction, setInstruction] = useState(task.instruction);
@@ -30,12 +77,16 @@ function TaskEditForm({ task, onDone }: { task: Task; onDone: () => void }) {
   const [criticalActions, setCriticalActions] = useState(
     (task.expected_critical_actions ?? []).join(", ")
   );
+  const existingSuccess = readSuccessConditions(task);
+  const [successKey, setSuccessKey] = useState<SuccessKey>(existingSuccess.key);
+  const [successValue, setSuccessValue] = useState(existingSuccess.value);
 
   const editMutation = useMutation({
     mutationFn: () =>
       updateTask(task.id, {
         instruction,
         starting_point: startingPoint || null,
+        success_conditions: parseSuccessConditions(successKey, successValue),
         expected_critical_actions: parseCriticalActions(criticalActions),
       }),
     onSuccess: () => {
@@ -58,6 +109,24 @@ function TaskEditForm({ task, onDone }: { task: Task; onDone: () => void }) {
         value={startingPoint}
         onChange={(e) => setStartingPoint(e.target.value)}
       />
+      <div className="flex gap-2">
+        <Select
+          className="w-auto"
+          value={successKey}
+          onChange={(e) => setSuccessKey(e.target.value as SuccessKey)}
+        >
+          {SUCCESS_KEYS.map((key) => (
+            <option key={key.value} value={key.value}>
+              {key.label}
+            </option>
+          ))}
+        </Select>
+        <Input
+          placeholder="Task is done when… (e.g. dashboard)"
+          value={successValue}
+          onChange={(e) => setSuccessValue(e.target.value)}
+        />
+      </div>
       <Input
         placeholder="Critical actions, comma-separated (e.g. add_to_cart)"
         value={criticalActions}
@@ -92,12 +161,21 @@ export default function TaskPage() {
   const [instruction, setInstruction] = useState("");
   const [startingPoint, setStartingPoint] = useState("");
   const [criticalActions, setCriticalActions] = useState("");
+  const [successKey, setSuccessKey] = useState<SuccessKey>("screen_key");
+  const [successValue, setSuccessValue] = useState("");
+
+  const { data: stimuli } = useQuery({
+    queryKey: ["stimuli", studyId],
+    queryFn: () => listStimuli(studyId),
+  });
+  const detected = detectedFlowScreens(stimuli);
 
   const createMutation = useMutation({
     mutationFn: () =>
       createTask(studyId, {
         instruction,
         starting_point: startingPoint || null,
+        success_conditions: parseSuccessConditions(successKey, successValue),
         expected_critical_actions: parseCriticalActions(criticalActions),
       }),
     onSuccess: () => {
@@ -105,6 +183,7 @@ export default function TaskPage() {
       setInstruction("");
       setStartingPoint("");
       setCriticalActions("");
+      setSuccessValue("");
     },
   });
 
@@ -190,6 +269,21 @@ export default function TaskPage() {
                       <p className="mt-1 text-[13px] text-ink-muted">{task.starting_point}</p>
                     </div>
                   )}
+                  <div className="mt-3 border-t border-hairline pt-3">
+                    <span className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-tertiary">
+                      Success condition
+                    </span>
+                    {readSuccessConditions(task).value ? (
+                      <p className="mt-1 font-mono text-[13px] text-ink-muted">
+                        {readSuccessConditions(task).key} = {readSuccessConditions(task).value}
+                      </p>
+                    ) : (
+                      <p className="mt-1 text-[13px] text-semantic-warn">
+                        Not set — simulations for this task will be rejected unless critical actions
+                        are defined.
+                      </p>
+                    )}
+                  </div>
                   {task.expected_critical_actions && task.expected_critical_actions.length > 0 && (
                     <div className="mt-3 border-t border-hairline pt-3">
                       <span className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-tertiary">
@@ -206,10 +300,12 @@ export default function TaskPage() {
           </div>
         )}
 
+        {/* One task per study, per the current product design — the backend
+        still supports several (a later A/B-across-tasks flow would need it),
+        but the study builder only ever shows a single task's worth of setup. */}
+        {(!tasks || tasks.length === 0) && (
         <Card className="flex-1">
-          <CardTitle>
-            {tasks && tasks.length > 0 ? "Add another task" : "Define the critical user task"}
-          </CardTitle>
+          <CardTitle>Define the critical user task</CardTitle>
           <CardDescription className="mt-2">
             The business-relevant journey a participant attempts — e.g. &quot;add a running shoe
             under ₹5,000 to cart&quot;, not an arbitrary instruction.
@@ -242,6 +338,61 @@ export default function TaskPage() {
               />
             </div>
             <div className="flex flex-col gap-1.5">
+              <Label htmlFor="success-value">Success condition</Label>
+              <div className="flex gap-2">
+                <Select
+                  className="w-auto"
+                  aria-label="Success condition type"
+                  value={successKey}
+                  onChange={(e) => setSuccessKey(e.target.value as SuccessKey)}
+                >
+                  {SUCCESS_KEYS.map((key) => (
+                    <option key={key.value} value={key.value}>
+                      {key.label}
+                    </option>
+                  ))}
+                </Select>
+                <Input
+                  id="success-value"
+                  placeholder="dashboard"
+                  value={successValue}
+                  onChange={(e) => setSuccessValue(e.target.value)}
+                />
+              </div>
+              {(detected.entry || detected.success) && (
+                <div className="flex flex-wrap items-center gap-2 rounded-md bg-surface-subtle px-3 py-2">
+                  <span className="text-[12px] text-ink-muted">
+                    Detected from your screens:{" "}
+                    {detected.entry && (
+                      <span className="font-mono">start {detected.entry}</span>
+                    )}
+                    {detected.entry && detected.success && " · "}
+                    {detected.success && (
+                      <span className="font-mono">finish {detected.success}</span>
+                    )}
+                  </span>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    onClick={() => {
+                      if (detected.entry) setStartingPoint(detected.entry);
+                      if (detected.success) {
+                        setSuccessKey("screen_key");
+                        setSuccessValue(detected.success);
+                      }
+                    }}
+                  >
+                    Use these
+                  </Button>
+                </div>
+              )}
+              <p className="text-[12px] text-ink-tertiary">
+                The task&apos;s finish line — reaching it is the only thing that marks a synthetic
+                participant COMPLETED. Without this (or critical actions below) a run can only ever
+                end in 100% drop-off, so starting one is rejected.
+              </p>
+            </div>
+            <div className="flex flex-col gap-1.5">
               <Label htmlFor="critical-actions">Critical actions (optional)</Label>
               <Input
                 id="critical-actions"
@@ -250,8 +401,8 @@ export default function TaskPage() {
                 onChange={(e) => setCriticalActions(e.target.value)}
               />
               <p className="text-[12px] text-ink-tertiary">
-                Element keys/semantic roles that count as this task actually succeeding — used by
-                the Analytics Engine&apos;s excess-actions/excess-screens friction metrics.
+                Milestones on the way to the finish line — used by the Analytics Engine&apos;s
+                excess-actions/excess-screens friction metrics.
               </p>
             </div>
             {createMutation.isError && (
@@ -266,6 +417,7 @@ export default function TaskPage() {
             </Button>
           </form>
         </Card>
+        )}
       </div>
 
       <Card>

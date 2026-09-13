@@ -45,7 +45,15 @@ export function MetricsGrid({ metrics }: { metrics: MetricsResponse }) {
   );
 }
 
+// A metric row is dimensioned by element or screen, so many rows share one
+// `metric` name — without this the grid shows a dozen identical `click_rate`
+// cards that look like nonsense rather than per-element measurements.
+function dimensionOf(metric: Metric): string | null {
+  return metric.element_key ?? metric.screen_key ?? null;
+}
+
 function MetricCard({ metric }: { metric: Metric }) {
+  const dimension = dimensionOf(metric);
   return (
     <Card className="p-4">
       <div className="flex items-baseline justify-between gap-3">
@@ -54,6 +62,11 @@ function MetricCard({ metric }: { metric: Metric }) {
           {metric.value ?? "—"}
         </span>
       </div>
+      {dimension && (
+        <p className="mt-1 truncate font-mono text-[12px] text-ink-tertiary" title={dimension}>
+          {dimension}
+        </p>
+      )}
       {metric.segment && <p className="mt-1 text-[12px] text-ink-tertiary">{metric.segment}</p>}
       {metric.sample_size !== null && (
         <p className="mt-1 font-mono text-[11px] tabular-nums text-ink-tertiary">

@@ -11,7 +11,11 @@ from app.core.auth import get_current_user
 from app.db.listen import get_listen_connection
 from app.db.models import UserModel
 from app.db.session import get_session
-from app.domain.schemas.simulation import SimulationRunCreate, SimulationRunRead
+from app.domain.schemas.simulation import (
+    SimulationRunCreate,
+    SimulationRunRead,
+    SimulationRunSummary,
+)
 from app.usecases.simulations import SimulationUseCase
 
 simulations_router_v1 = APIRouter(tags=SimulationsRoutes.TAGS)
@@ -34,6 +38,47 @@ async def create_simulation_run(
     run = await use_case.create_run(
         current_user, study_id, body.population_size, body.task_id, body.config, body.seed
     )
+    return SimulationRunRead.model_validate(run)
+
+
+@simulations_router_v1.get(SimulationsRoutes.LIST, response_model=list[SimulationRunSummary])
+async def list_simulation_runs(
+    study_id: uuid.UUID,
+    current_user: UserModel = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> list[SimulationRunSummary]:
+    use_case = SimulationUseCase(session)
+    rows = await use_case.list_runs(current_user, study_id)
+    return [
+        SimulationRunSummary(
+            id=row["run"].id,
+            status=row["run"].status,
+            population_size=row["run"].population_size,
+            source=row["run"].source,
+            seed=row["run"].seed,
+            created_at=row["run"].created_at,
+            started_at=row["run"].started_at,
+            completed_at=row["run"].completed_at,
+            completion_rate=row["completion_rate"],
+        )
+        for row in rows
+    ]
+
+
+@simulations_router_v1.post(
+    SimulationsRoutes.PUBLISH, response_model=SimulationRunRead, status_code=status.HTTP_201_CREATED
+)
+async def publish_study(
+    study_id: uuid.UUID,
+    current_user: UserModel = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> SimulationRunRead:
+    """Publishes a DRAFT study and starts its first simulation run in one
+    request — see `SimulationUseCase.publish` for the atomicity this relies
+    on. Returns the created run so the caller can navigate straight to its
+    results page."""
+    use_case = SimulationUseCase(session)
+    run = await use_case.publish(current_user, study_id)
     return SimulationRunRead.model_validate(run)
 
 

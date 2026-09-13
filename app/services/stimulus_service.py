@@ -252,6 +252,19 @@ class StimulusService:
             )
         await self._session.flush()
 
+    async def save_screen_roles(self, screens: list[ScreenModel], roles: dict[str, dict]) -> None:
+        """Stores each screen's flow role (`entry`/`success`/`duplicate_of`, see
+        `classify_screens`) under `screens.analysis["flow"]`, alongside the raw
+        element analysis already kept there. Reassigns `analysis` rather than
+        mutating it in place — SQLAlchemy doesn't track in-place JSONB edits, so
+        an in-place update would silently never be persisted."""
+        for screen in screens:
+            role = roles.get(screen.screen_key)
+            if role is None:
+                continue
+            screen.analysis = {**(screen.analysis or {}), "flow": _strip_null_bytes(role)}
+        await self._session.flush()
+
     async def save_figma_screen(
         self,
         stimulus_id: uuid.UUID,

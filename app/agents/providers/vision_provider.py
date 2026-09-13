@@ -71,11 +71,35 @@ class ScreenGraphInference(BaseModel):
     transitions: list[InferredTransition]
 
 
+class ScreenRole(BaseModel):
+    """What a screen *is* within the flow, as opposed to what it contains.
+
+    `duplicate_of` is the load-bearing field: a researcher uploading a flow
+    routinely captures the same UI state more than once (unfilled vs. filled,
+    keyboard open vs. closed). Those arrive as separate screens, and
+    `infer_transitions` then scatters the flow's incoming edges onto one twin
+    and its outgoing edges onto the other — severing the graph so most of the
+    prototype is unreachable. Naming the twin here lets the caller collapse
+    them back onto one node.
+    """
+
+    screen_key: str
+    summary: str
+    role: Literal["entry", "step", "success", "error", "other"]
+    duplicate_of: str | None
+
+
+class ScreenRoleInference(BaseModel):
+    screens: list[ScreenRole]
+
+
 @runtime_checkable
 class VisionProvider(Protocol):
     async def analyze_screen(self, image: bytes, content_type: str) -> ScreenAnalysis: ...
 
     async def infer_transitions(self, screens: list[ScreenSummary]) -> ScreenGraphInference: ...
+
+    async def classify_screens(self, screens: list[ScreenSummary]) -> ScreenRoleInference: ...
 
 
 _ANALYZE_SYSTEM_PROMPT = (
@@ -113,6 +137,32 @@ _TRANSITIONS_SYSTEM_PROMPT = (
 )
 
 
+_CLASSIFY_SYSTEM_PROMPT = (
+    "You are identifying the shape of a UI prototype flow from its already-analyzed "
+    "screens. You will be given a list of screens, each with its elements, in the order "
+    "the researcher uploaded them. For EVERY screen given to you, report:\n\n"
+    "- summary: one short sentence describing what this screen is and what the user does "
+    "on it, based only on its actual elements and their text.\n"
+    "- role: 'entry' for the screen a user starts on (a launch, landing, splash or sign-in "
+    "chooser screen — exactly ONE screen may be 'entry'); 'success' for the screen that "
+    "means the user's journey finished successfully (a confirmation, 'account created', "
+    "'order placed', 'welcome' screen — at most ONE screen may be 'success'); 'error' for "
+    "a failure/validation state; 'step' for an ordinary intermediate step; 'other' when "
+    "none of these fit.\n"
+    "- duplicate_of: when this screen shows the SAME underlying UI state as an earlier "
+    "screen in the list and differs only in transient presentation — empty vs. filled-in "
+    "fields, keyboard shown or hidden, a validation hint, a hover/focus highlight — set "
+    "this to that earlier screen's screen_key. Otherwise null. Two screens are NOT "
+    "duplicates just because they look similar or share a layout: a password step and a "
+    "verify-email step are different states even if both are one input and one button. "
+    "Only say duplicate_of when a user would say they are on the same screen.\n\n"
+    "Judge 'entry' and 'success' by what the screens actually say, not by their position "
+    "in the list — a flow's last uploaded screen is often, but not always, its success "
+    "screen. Every screen_key you report, including in duplicate_of, must exactly match "
+    "one given to you — never invent one, and never point duplicate_of at itself."
+)
+
+
 class PydanticAIVisionProvider:
     def __init__(self, model: str | None = None) -> None:
         self._model = model or settings.vision_model
@@ -132,4 +182,14 @@ class PydanticAIVisionProvider:
         )
         payload = [screen.model_dump() for screen in screens]
         result = await agent.run([f"Screens: {payload}"])
+        return result.output
+
+    async def classify_screens(self, screens: list[ScreenSummary]) -> ScreenRoleInference:
+        if not screens:
+            return ScreenRoleInference(screens=[])
+        agent = Agent(
+            self._model, output_type=ScreenRoleInference, system_prompt=_CLASSIFY_SYSTEM_PROMPT
+        )
+        payload = [screen.model_dump() for screen in screens]
+        result = await agent.run([f"Screens, in upload order: {payload}"])
         return result.output

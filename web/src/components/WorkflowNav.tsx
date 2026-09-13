@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 import { getAudience } from "@/lib/api/audiences";
+import { listSimulationRuns } from "@/lib/api/simulations";
 import { listStimuli } from "@/lib/api/stimulus";
 import { listTasks } from "@/lib/api/tasks";
 
@@ -18,11 +19,9 @@ const STEPS = [
 
 // The study workflow as a stepper, not a plain tab bar — each step shows a
 // checkmark once it's genuinely satisfied (an audience exists, a task exists,
-// at least one stimulus screen has been analyzed), computed from the same
-// queries the individual tabs already run, so this reflects real state rather
-// than a client-side flag. There's no endpoint to list a study's simulation
-// runs, so "Simulation" never gets a checkmark here — it's always the
-// destination, matching how far the workflow can honestly be tracked.
+// at least one stimulus screen has been analyzed, at least one simulation run
+// exists), computed from the same queries the individual tabs already run, so
+// this reflects real state rather than a client-side flag.
 export function WorkflowNav({ studyId }: { studyId: string }) {
   const pathname = usePathname();
   const base = `/studies/${studyId}`;
@@ -36,11 +35,16 @@ export function WorkflowNav({ studyId }: { studyId: string }) {
     queryKey: ["stimuli", studyId],
     queryFn: () => listStimuli(studyId),
   });
+  const { data: runs } = useQuery({
+    queryKey: ["simulationRuns", studyId],
+    queryFn: () => listSimulationRuns(studyId),
+  });
 
   const completed: Record<string, boolean> = {
     audience: Boolean(audience),
     task: Boolean(tasks && tasks.length > 0),
     stimulus: Boolean(stimuli?.some((s) => s.screens.some((screen) => screen.elements.length > 0))),
+    simulation: Boolean(runs && runs.length > 0),
   };
 
   return (

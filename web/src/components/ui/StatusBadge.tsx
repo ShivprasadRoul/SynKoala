@@ -14,13 +14,13 @@ const TONE_CLASSES: Record<string, string> = {
   CANCELLED: "border border-hairline-strong bg-surface-3 text-ink",
 };
 
-export function StatusBadge({ status }: { status: string }) {
+export function StatusBadge({ status, label }: { status: string; label?: string }) {
   const classes = TONE_CLASSES[status] ?? "bg-surface-2 text-ink-muted";
   return (
     <span
       className={`inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.04em] ${classes}`}
     >
-      {status}
+      {label ?? status}
     </span>
   );
 }

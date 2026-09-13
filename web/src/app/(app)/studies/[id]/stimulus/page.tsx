@@ -2,7 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams } from "next/navigation";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { getFigmaAuthorizeUrl, getFigmaStatus } from "@/lib/api/auth";
 import { analyzeStimuli, bulkUploadStimuli, listStimuli, uploadStimulus } from "@/lib/api/stimulus";
@@ -76,6 +76,20 @@ export default function StimulusPage() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["stimuli", studyId] }),
   });
 
+  // --- Bulk import: pick any number of screenshots and they're uploaded (and
+  // then analyzed) immediately, no type field or separate submit step — a
+  // fast path for a researcher who just wants their whole flow imported in
+  // one go, as an alternative to the more deliberate form below. Fixed
+  // type="mobile_ui" since there's nothing here to ask it from. ---
+  const bulkImportInputRef = useRef<HTMLInputElement>(null);
+  const bulkImportMutation = useMutation({
+    mutationFn: async (importFiles: File[]) => {
+      await bulkUploadStimuli(studyId, { type: "mobile_ui", files: importFiles });
+      return analyzeStimuli(studyId);
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["stimuli", studyId] }),
+  });
+
   if (isLoading) return <p className="text-[14px] text-ink-muted">Loading stimuli…</p>;
 
   const allScreens = (stimuli ?? []).flatMap((s) => s.screens.map((screen) => ({ stimulus: s, screen })));
@@ -85,11 +99,45 @@ export default function StimulusPage() {
 
   return (
     <div className="flex flex-col gap-8">
-      <div>
-        <h2 className="font-display text-[18px] font-bold text-ink">Add your product experience</h2>
-        <p className="mt-1 text-[13px] text-ink-muted">
-          Import the interface SynKoala will test — from Figma directly, or a screenshot.
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h2 className="font-display text-[18px] font-bold text-ink">Add your product experience</h2>
+          <p className="mt-1 text-[13px] text-ink-muted">
+            Import the interface SynKoala will test — from Figma directly, or a screenshot.
+          </p>
+        </div>
+        <div className="flex flex-col items-end gap-1.5">
+          <input
+            ref={bulkImportInputRef}
+            type="file"
+            multiple
+            accept="image/*"
+            className="hidden"
+            onChange={(e) => {
+              const selected = Array.from(e.target.files ?? []);
+              if (selected.length > 0) bulkImportMutation.mutate(selected);
+              e.target.value = "";
+            }}
+          />
+          <Button
+            type="button"
+            variant="secondary"
+            disabled={bulkImportMutation.isPending}
+            onClick={() => bulkImportInputRef.current?.click()}
+          >
+            {bulkImportMutation.isPending ? "Importing…" : "Bulk import screens"}
+          </Button>
+          <p className="text-[12px] text-ink-tertiary">
+            Select every screen at once — uploaded and analyzed automatically.
+          </p>
+          {bulkImportMutation.isError && (
+            <p className="text-[12px] text-semantic-warn">
+              {bulkImportMutation.error instanceof Error
+                ? bulkImportMutation.error.message
+                : "Bulk import failed"}
+            </p>
+          )}
+        </div>
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">

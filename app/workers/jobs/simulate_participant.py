@@ -34,7 +34,15 @@ async def _finalize_run_and_notify(
 ) -> None:
     """Shared by the normal completion path and the permanent-job-failure
     fallback below — both need the exact same "am I the last participant?"
-    bookkeeping (planning/06-study-orchestrator.md item 4)."""
+    bookkeeping (planning/06-study-orchestrator.md item 4).
+
+    `lock_for_finalize` first is required, not optional: with `NUM_WORKERS`
+    participants finishing at once, each in its own transaction, two jobs can
+    otherwise both call `is_run_complete` before either's own terminal write
+    has committed — both see "not complete" and the run never finalizes. The
+    row lock serializes concurrent finalize attempts so each one's recheck
+    below is guaranteed to see every previously-committed sibling."""
+    await runs.lock_for_finalize(run_id)
     if await runs.is_run_complete(run_id):
         run = await runs.finalize_run(run_id)
         if run.status in ("COMPLETED", "FAILED"):

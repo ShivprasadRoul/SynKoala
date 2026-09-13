@@ -43,6 +43,8 @@ class MetricRead(BaseModel):
     metric: str
     element_id: uuid.UUID | None
     screen_id: uuid.UUID | None
+    element_key: str | None = None
+    screen_key: str | None = None
     segment: str | None
     value: float | None
     sample_size: int | None
@@ -64,6 +66,29 @@ class HeatmapCell(BaseModel):
 class PathRead(BaseModel):
     participant_run_id: uuid.UUID
     screens: list[uuid.UUID]
+
+
+class PixelHeatmapCell(BaseModel):
+    screen_id: uuid.UUID
+    x: float
+    y: float
+    intensity: float
+
+
+class ScanpathStep(BaseModel):
+    sequence_no: int
+    type: str
+    screen_id: uuid.UUID | None
+    element_id: uuid.UUID | None
+    x: float | None
+    y: float | None
+    duration_ms: int | None
+    scan_number: int | None
+
+
+class ScanpathRead(BaseModel):
+    participant_run_id: uuid.UUID
+    path: list[ScanpathStep]
 
 
 class SegmentResultRead(BaseModel):

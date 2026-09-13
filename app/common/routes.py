@@ -80,6 +80,9 @@ class SimulationsRoutes:
     TAGS = ["simulations"]
     BASE_PATH = "studies/{study_id}/simulations"
     CREATE = f"/{BASE_PATH}"
+    # Same path as CREATE, different verb (GET vs POST) — a study's run history.
+    LIST = f"/{BASE_PATH}"
+    PUBLISH = "/studies/{study_id}/publish"
     FLAT_BASE_PATH = "simulations"
     DETAIL = f"/{FLAT_BASE_PATH}/{{run_id}}"
     CANCEL = f"/{FLAT_BASE_PATH}/{{run_id}}/cancel"
@@ -93,7 +96,9 @@ class ResultsRoutes:
     OBSERVATIONS = f"/{BASE_PATH}/observations"
     METRICS = f"/{BASE_PATH}/metrics"
     HEATMAP = f"/{BASE_PATH}/heatmap"
+    PIXEL_HEATMAP = f"/{BASE_PATH}/heatmap/pixels"
     PATHS = f"/{BASE_PATH}/paths"
+    SCANPATHS = f"/{BASE_PATH}/scanpaths"
     SEGMENTS = f"/{BASE_PATH}/segments"
     VALIDATION = f"/{BASE_PATH}/validation"
     INSIGHTS = f"/{BASE_PATH}/insights"

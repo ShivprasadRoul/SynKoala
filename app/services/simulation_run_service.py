@@ -93,6 +93,27 @@ class SimulationRunService:
             raise NotFoundError(f"Simulation run {run_id} not found")
         return run
 
+    async def lock_for_finalize(self, run_id: uuid.UUID) -> SimulationRunModel:
+        """`SELECT ... FOR UPDATE` on the run row, held for the rest of the
+        caller's transaction — closes a real race in `_finalize_run_and_notify`
+        (app/workers/jobs/simulate_participant.py): with `NUM_WORKERS` participant
+        jobs finishing concurrently, each in its own session/transaction, the last
+        two participants to go terminal can both run `is_run_complete` before
+        either's own terminal write has committed, so both see "not yet complete"
+        and neither ever calls `finalize_run` — the run is stuck at RUNNING
+        forever despite every participant being terminal (reproduced directly:
+        two 5-participant runs with NUM_WORKERS=5 both stuck this way).
+        Acquiring this lock first forces concurrent finalize attempts to
+        serialize: whichever job's transaction commits (releasing the lock)
+        first, the next job's `is_run_complete` recheck — a fresh statement
+        under READ COMMITTED — is guaranteed to see that committed write."""
+        run = await self._session.scalar(
+            select(SimulationRunModel).where(SimulationRunModel.id == run_id).with_for_update()
+        )
+        if run is None:
+            raise NotFoundError(f"Simulation run {run_id} not found")
+        return run
+
     async def mark_cancelling(self, run: SimulationRunModel) -> SimulationRunModel:
         run.status = "CANCELLING"
         await self._session.flush()
@@ -143,20 +164,28 @@ class SimulationRunService:
         completed successfully before the cancel reached them (their own job
         was already IN_PROGRESS and ran to completion), but the researcher
         explicitly asked to cancel, so the run itself must not silently become
-        COMPLETED/FAILED as if nothing was cancelled."""
+        COMPLETED/FAILED as if nothing was cancelled.
+
+        Otherwise `FAILED` means the *simulation* failed, not that the synthetic
+        users did: a population that all abandoned is a valid result (a 100%
+        drop-off is often the finding), so the run only fails when no
+        participant produced a simulated outcome at all — i.e. every
+        participant_run carries the `job_permanently_failed` error marker
+        written by `simulate_participant`'s permanent-failure path."""
         run = await self.get_by_id(run_id)
         if run.status == "CANCELLING":
             run.status = "CANCELLED"
         else:
-            succeeded = await self._session.scalar(
+            errored = await self._session.scalar(
                 select(func.count())
                 .select_from(ParticipantRunModel)
                 .where(
                     ParticipantRunModel.simulation_run_id == run_id,
-                    ParticipantRunModel.status == "COMPLETED",
+                    ParticipantRunModel.final_outcome["error"].astext.isnot(None),
                 )
             )
-            run.status = "COMPLETED" if succeeded else "FAILED"
+            total = await self.count_total(run_id)
+            run.status = "FAILED" if total == 0 or errored == total else "COMPLETED"
         run.completed_at = datetime.now(UTC)
         await self._session.flush()
         return run
@@ -168,6 +197,19 @@ class SimulationRunService:
             .where(ParticipantRunModel.simulation_run_id == run_id)
         )
         return total or 0
+
+    async def list_by_study(self, study_id: uuid.UUID) -> list[SimulationRunModel]:
+        """Every run ever created for a study, oldest first — a study's run
+        history (planning/02-api.md's `GET /studies/:id/simulations`). Runs are
+        append-only (`create_run` always inserts, never updates a prior row),
+        so this list is also each run's permanent "Run #N" position, oldest ==
+        #1, without needing a dedicated sequence column."""
+        result = await self._session.scalars(
+            select(SimulationRunModel)
+            .where(SimulationRunModel.study_id == study_id)
+            .order_by(SimulationRunModel.created_at.asc())
+        )
+        return list(result)
 
     async def list_sibling_runs(
         self, study_id: uuid.UUID, task_id: uuid.UUID | None, exclude_run_id: uuid.UUID

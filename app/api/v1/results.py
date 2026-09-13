@@ -15,6 +15,8 @@ from app.domain.schemas.results import (
     ObservationRead,
     ParticipantRunRead,
     PathRead,
+    PixelHeatmapCell,
+    ScanpathRead,
     SegmentResultRead,
     ValidationResponse,
     ValidationResultRead,
@@ -74,6 +76,18 @@ async def get_heatmap(
     return [HeatmapCell(**c) for c in cells]
 
 
+@results_router_v1.get(ResultsRoutes.PIXEL_HEATMAP, response_model=list[PixelHeatmapCell])
+async def get_pixel_heatmap(
+    run_id: uuid.UUID,
+    segment: str | None = None,
+    current_user: UserModel = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> list[PixelHeatmapCell]:
+    use_case = ResultsUseCase(session)
+    cells = await use_case.get_pixel_heatmap(current_user, run_id, segment=segment)
+    return [PixelHeatmapCell(**c) for c in cells]
+
+
 @results_router_v1.get(ResultsRoutes.PATHS, response_model=list[PathRead])
 async def get_paths(
     run_id: uuid.UUID,
@@ -83,6 +97,17 @@ async def get_paths(
     use_case = ResultsUseCase(session)
     paths = await use_case.get_paths(current_user, run_id)
     return [PathRead(**p) for p in paths]
+
+
+@results_router_v1.get(ResultsRoutes.SCANPATHS, response_model=list[ScanpathRead])
+async def get_scanpaths(
+    run_id: uuid.UUID,
+    current_user: UserModel = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> list[ScanpathRead]:
+    use_case = ResultsUseCase(session)
+    scanpaths = await use_case.get_scanpaths(current_user, run_id)
+    return [ScanpathRead(**s) for s in scanpaths]
 
 
 @results_router_v1.get(ResultsRoutes.SEGMENTS, response_model=list[SegmentResultRead])
