@@ -115,7 +115,7 @@ async def test_generate_population_overlays_grounded_fields_when_available():
     ]
     use_case._engine = Mock()
     use_case._engine.grounding_available.return_value = True
-    use_case._engine.sample_grounded_participants.return_value = grounded_result
+    use_case._engine.sample_grounded_participants = AsyncMock(return_value=grounded_result)
 
     await use_case.generate_population(
         user=Mock(), study_id=uuid.uuid4(), population_size=2, seed=42

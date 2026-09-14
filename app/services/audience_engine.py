@@ -1,7 +1,7 @@
+import asyncio
 import random
-from functools import lru_cache
-from pathlib import Path
 
+from app.core import storage
 from app.core.persona_prior.generator import PersonaGenerator
 from app.core.persona_prior.prior_retrieval import PriorRetriever
 from app.core.settings import settings
@@ -43,12 +43,23 @@ _CORE_TRAIT_KEYS = (
 )
 
 
-@lru_cache(maxsize=1)
-def _load_retriever(graph_path: str) -> PriorRetriever:
-    """Module-level cache: the compiled prior graph is ~30MB — read it once per
-    process, not once per `AudienceEngine()` instantiation (a fresh instance is built
-    per request in `AudienceUseCase.__init__`)."""
-    return PriorRetriever(graph_path)
+# Module-level cache: the compiled prior graph is ~30MB — fetched from Supabase
+# Storage once per process, not once per `AudienceEngine()` instantiation (a fresh
+# instance is built per request in `AudienceUseCase.__init__`). A lock (not
+# `functools.lru_cache`, which can't await) guards the first concurrent fetch so two
+# simultaneous requests don't both download it.
+_retriever_cache: dict[str, PriorRetriever] = {}
+_retriever_cache_lock = asyncio.Lock()
+
+
+async def _load_retriever(storage_path: str) -> PriorRetriever:
+    if storage_path in _retriever_cache:
+        return _retriever_cache[storage_path]
+    async with _retriever_cache_lock:
+        if storage_path not in _retriever_cache:
+            content, _content_type = await storage.download_object(storage_path)
+            _retriever_cache[storage_path] = PriorRetriever.from_bytes(content)
+    return _retriever_cache[storage_path]
 
 
 def _normalize_trait(value: object) -> dict[str, float]:
@@ -98,13 +109,16 @@ class AudienceEngine:
 
     def grounding_available(self) -> bool:
         """True once a real, dataset-backed prior graph is configured
-        (`PERSONA_PRIOR_GRAPH_PATH`) — mirrors Figma OAuth's own "unset disables the
-        feature" pattern (app/core/settings.py) rather than failing hard: unlike a
-        screenshot no model has looked at, there's an honest existing substitute here
-        (`sample_participants`, above), so an unconfigured graph just means falling
-        back to it, not refusing to generate a population at all."""
-        path = settings.persona_prior_graph_path
-        return bool(path) and Path(path).is_file()
+        (`PERSONA_PRIOR_GRAPH_STORAGE_PATH`) — mirrors Figma OAuth's own "unset
+        disables the feature" pattern (`FigmaOAuthService`, app/core/settings.py)
+        rather than failing hard: unlike a screenshot no model has looked at, there's
+        an honest existing substitute here (`sample_participants`, above), so an
+        unconfigured graph just means falling back to it, not refusing to generate a
+        population at all. This only checks *configuration*, not that the object
+        actually exists in Storage — same as Figma's own check — so a wrong path is a
+        real `StorageError` raised by `sample_grounded_participants` once grounding
+        is actually attempted, not a silent fallback."""
+        return bool(settings.persona_prior_graph_storage_path)
 
     def _to_audience_def(self, definition: dict) -> dict:
         """Adapts a researcher's `AudienceCreate.definition` dict into the prior
@@ -136,14 +150,17 @@ class AudienceEngine:
 
         return audience_def
 
-    def sample_grounded_participants(self, definition: dict, n: int, seed: int) -> list[dict]:
+    async def sample_grounded_participants(self, definition: dict, n: int, seed: int) -> list[dict]:
         """Real-data-grounded counterpart to `sample_participants`: same 5 core
         traits (so `HeuristicParticipantModel` and everything downstream needs no
         change), plus `identity`/`demographics`/`observed_behavior`/`provenance` —
         genuinely new pieces with no equivalent in the qualitative-band sampler.
         Deterministic given `seed`, no model/agent call — same guarantee as
-        `sample_participants` (planning/04-audience-engine.md)."""
-        retriever = _load_retriever(settings.persona_prior_graph_path)
+        `sample_participants` (planning/04-audience-engine.md). Raises
+        `app.core.storage.StorageError` if `grounding_available()` is True but the
+        configured object can't actually be fetched — a misconfigured path is a real
+        error, not silently masked by falling back."""
+        retriever = await _load_retriever(settings.persona_prior_graph_storage_path)
         generator = PersonaGenerator(retriever)
         audience_def = self._to_audience_def(definition)
 

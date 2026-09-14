@@ -4,11 +4,12 @@ resolves the most specific prior available for a given feature, per
 planning/04-audience-engine.md's grounding of `AudienceEngine.sample_participants`.
 
 Ported from the standalone Syndata persona-generator prototype
-(`prior_crreation/graph_layer/16_prior_retrieval.py`) with no behavioral changes."""
+(`prior_crreation/graph_layer/16_prior_retrieval.py`) — `PriorRetriever` itself is
+storage-agnostic (built from an already-parsed `dict`); `from_bytes` is how
+`app/services/audience_engine.py` builds one from a Supabase Storage download."""
 
 import copy
 import json
-from pathlib import Path
 from typing import Any
 
 # Each hierarchy entry is (condition-type name in the graph's per-feature index, the
@@ -28,16 +29,18 @@ _FALLBACK_HIERARCHY: list[tuple[str, list[str]]] = [
 
 
 class PriorRetriever:
-    """Holds the full prior graph in memory (loaded once — see the
-    `@lru_cache`-wrapped loader in `app/services/audience_engine.py`) and resolves
-    feature priors against it."""
+    """Holds the full prior graph in memory (fetched from Supabase Storage once per
+    process — see the cached loader in `app/services/audience_engine.py`) and
+    resolves feature priors against it."""
 
-    def __init__(self, graph_path: str | Path) -> None:
-        with open(graph_path) as f:
-            graph = json.load(f)
+    def __init__(self, graph: dict[str, Any]) -> None:
         self.priors: dict[str, Any] = graph.get("priors", {})
         self.index: dict[str, Any] = graph.get("index", {})
         self.relationships: list[dict[str, Any]] = graph.get("relationships", [])
+
+    @classmethod
+    def from_bytes(cls, data: bytes) -> "PriorRetriever":
+        return cls(json.loads(data))
 
     def _build_cond_key(self, conditions: dict[str, Any], keys: list[str]) -> str:
         cond_dict = {k: conditions[k] for k in keys if k in conditions and conditions[k]}

@@ -33,7 +33,3 @@ ai-agent-skills-backend-development.zip
 .test_image/
 tests/fixtures/*/logs/
 tests/fixtures/*/results/
-
-# AudienceEngine's compiled prior-graph asset (PERSONA_PRIOR_GRAPH_PATH) — a large
-# (tens of MB) local data file, never committed, same treatment as .env.
-data/

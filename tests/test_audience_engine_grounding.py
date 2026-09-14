@@ -1,6 +1,7 @@
 import json
 
-from app.services.audience_engine import _CORE_TRAIT_KEYS, AudienceEngine, _load_retriever
+from app.services import audience_engine as audience_engine_module
+from app.services.audience_engine import _CORE_TRAIT_KEYS, AudienceEngine
 
 _FAKE_GRAPH = {
     "priors": {
@@ -36,46 +37,47 @@ _FAKE_GRAPH = {
 }
 
 
-def _write_fake_graph(tmp_path) -> str:
-    path = tmp_path / "fake_prior_graph.json"
-    path.write_text(json.dumps(_FAKE_GRAPH))
-    return str(path)
+def _mock_download(monkeypatch, storage_path: str = "persona-priors/fake_graph.json") -> list:
+    """Stands in for `app.core.storage.download_object` so tests never hit a real
+    Supabase Storage bucket — records each call so tests can assert caching."""
+    calls: list[str] = []
+
+    async def fake_download_object(bucket_and_path: str):
+        calls.append(bucket_and_path)
+        return json.dumps(_FAKE_GRAPH).encode(), "application/json"
+
+    monkeypatch.setattr(audience_engine_module.storage, "download_object", fake_download_object)
+    audience_engine_module._retriever_cache.clear()
+    return calls
 
 
 def test_grounding_unavailable_without_a_configured_path(monkeypatch):
-    monkeypatch.setattr("app.services.audience_engine.settings.persona_prior_graph_path", None)
-    assert AudienceEngine().grounding_available() is False
-
-
-def test_grounding_unavailable_when_configured_file_is_missing(monkeypatch, tmp_path):
     monkeypatch.setattr(
-        "app.services.audience_engine.settings.persona_prior_graph_path",
-        str(tmp_path / "does_not_exist.json"),
+        "app.services.audience_engine.settings.persona_prior_graph_storage_path", None
     )
     assert AudienceEngine().grounding_available() is False
 
 
-def test_grounding_available_once_a_real_graph_file_is_configured(monkeypatch, tmp_path):
-    graph_path = _write_fake_graph(tmp_path)
+def test_grounding_available_once_a_storage_path_is_configured(monkeypatch):
     monkeypatch.setattr(
-        "app.services.audience_engine.settings.persona_prior_graph_path", graph_path
+        "app.services.audience_engine.settings.persona_prior_graph_storage_path",
+        "persona-priors/audience_prior_graph.json",
     )
-    _load_retriever.cache_clear()
     assert AudienceEngine().grounding_available() is True
 
 
-def test_sample_grounded_participants_is_deterministic_and_shaped_correctly(monkeypatch, tmp_path):
-    graph_path = _write_fake_graph(tmp_path)
+async def test_sample_grounded_participants_is_deterministic_and_shaped_correctly(monkeypatch):
+    storage_path = "persona-priors/fake_graph.json"
+    _mock_download(monkeypatch, storage_path)
     monkeypatch.setattr(
-        "app.services.audience_engine.settings.persona_prior_graph_path", graph_path
+        "app.services.audience_engine.settings.persona_prior_graph_storage_path", storage_path
     )
-    _load_retriever.cache_clear()
 
     engine = AudienceEngine()
     definition = {"country_code": "IND", "region": "Mumbai"}
 
-    first = engine.sample_grounded_participants(definition, n=3, seed=7)
-    second = engine.sample_grounded_participants(definition, n=3, seed=7)
+    first = await engine.sample_grounded_participants(definition, n=3, seed=7)
+    second = await engine.sample_grounded_participants(definition, n=3, seed=7)
 
     assert first == second
     assert len(first) == 3
@@ -87,3 +89,19 @@ def test_sample_grounded_participants_is_deterministic_and_shaped_correctly(monk
         assert "demographics" in persona
         assert "observed_behavior" in persona
         assert persona["provenance"], "every persona should cite at least one real source"
+
+
+async def test_sample_grounded_participants_fetches_the_graph_only_once(monkeypatch):
+    """The ~30MB graph should be downloaded from Storage once per process, not once
+    per call — this is what actually makes repeated generation fast."""
+    storage_path = "persona-priors/fake_graph.json"
+    calls = _mock_download(monkeypatch, storage_path)
+    monkeypatch.setattr(
+        "app.services.audience_engine.settings.persona_prior_graph_storage_path", storage_path
+    )
+
+    engine = AudienceEngine()
+    await engine.sample_grounded_participants({"country_code": "IND"}, n=1, seed=1)
+    await engine.sample_grounded_participants({"country_code": "IND"}, n=1, seed=2)
+
+    assert calls == [storage_path]

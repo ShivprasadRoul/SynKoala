@@ -60,7 +60,7 @@ class AudienceUseCase:
 
         grounded = None
         if self._engine.grounding_available():
-            grounded = self._engine.sample_grounded_participants(
+            grounded = await self._engine.sample_grounded_participants(
                 audience.definition, population_size, seed or 0
             )
             traits_list = [g["traits"] for g in grounded]
