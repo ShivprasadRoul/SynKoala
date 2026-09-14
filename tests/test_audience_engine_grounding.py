@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from app.services import audience_engine as audience_engine_module
 from app.services.audience_engine import _CORE_TRAIT_KEYS, AudienceEngine
 
@@ -51,22 +53,15 @@ def _mock_download(monkeypatch, storage_path: str = "persona-priors/fake_graph.j
     return calls
 
 
-def test_grounding_unavailable_without_a_configured_path(monkeypatch):
+async def test_sample_participants_raises_a_clear_error_when_unconfigured(monkeypatch):
     monkeypatch.setattr(
         "app.services.audience_engine.settings.persona_prior_graph_storage_path", None
     )
-    assert AudienceEngine().grounding_available() is False
+    with pytest.raises(RuntimeError, match="PERSONA_PRIOR_GRAPH_STORAGE_PATH"):
+        await AudienceEngine().sample_participants({"country_code": "IND"}, n=1, seed=1)
 
 
-def test_grounding_available_once_a_storage_path_is_configured(monkeypatch):
-    monkeypatch.setattr(
-        "app.services.audience_engine.settings.persona_prior_graph_storage_path",
-        "persona-priors/audience_prior_graph.json",
-    )
-    assert AudienceEngine().grounding_available() is True
-
-
-async def test_sample_grounded_participants_is_deterministic_and_shaped_correctly(monkeypatch):
+async def test_sample_participants_is_deterministic_and_shaped_correctly(monkeypatch):
     storage_path = "persona-priors/fake_graph.json"
     _mock_download(monkeypatch, storage_path)
     monkeypatch.setattr(
@@ -76,8 +71,8 @@ async def test_sample_grounded_participants_is_deterministic_and_shaped_correctl
     engine = AudienceEngine()
     definition = {"country_code": "IND", "region": "Mumbai"}
 
-    first = await engine.sample_grounded_participants(definition, n=3, seed=7)
-    second = await engine.sample_grounded_participants(definition, n=3, seed=7)
+    first = await engine.sample_participants(definition, n=3, seed=7)
+    second = await engine.sample_participants(definition, n=3, seed=7)
 
     assert first == second
     assert len(first) == 3
@@ -91,7 +86,7 @@ async def test_sample_grounded_participants_is_deterministic_and_shaped_correctl
         assert persona["provenance"], "every persona should cite at least one real source"
 
 
-async def test_sample_grounded_participants_fetches_the_graph_only_once(monkeypatch):
+async def test_sample_participants_fetches_the_graph_only_once(monkeypatch):
     """The ~30MB graph should be downloaded from Storage once per process, not once
     per call — this is what actually makes repeated generation fast."""
     storage_path = "persona-priors/fake_graph.json"
@@ -101,7 +96,7 @@ async def test_sample_grounded_participants_fetches_the_graph_only_once(monkeypa
     )
 
     engine = AudienceEngine()
-    await engine.sample_grounded_participants({"country_code": "IND"}, n=1, seed=1)
-    await engine.sample_grounded_participants({"country_code": "IND"}, n=1, seed=2)
+    await engine.sample_participants({"country_code": "IND"}, n=1, seed=1)
+    await engine.sample_participants({"country_code": "IND"}, n=1, seed=2)
 
     assert calls == [storage_path]

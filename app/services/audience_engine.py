@@ -1,5 +1,4 @@
 import asyncio
-import random
 
 from app.core import storage
 from app.core.persona_prior.generator import PersonaGenerator
@@ -52,6 +51,15 @@ _retriever_cache: dict[str, PriorRetriever] = {}
 _retriever_cache_lock = asyncio.Lock()
 
 
+def _require_graph_storage_path() -> str:
+    if not settings.persona_prior_graph_storage_path:
+        raise RuntimeError(
+            "PERSONA_PRIOR_GRAPH_STORAGE_PATH is not set — required for audience "
+            "population generation (planning/04-audience-engine.md)"
+        )
+    return settings.persona_prior_graph_storage_path
+
+
 async def _load_retriever(storage_path: str) -> PriorRetriever:
     if storage_path in _retriever_cache:
         return _retriever_cache[storage_path]
@@ -93,33 +101,6 @@ class AudienceEngine:
             traits[trait] = _normalize_trait(raw) if raw is not None else dict(_DEFAULT_TRAIT)
         return {"demographics": definition.get("demographics", {}), "traits": traits}
 
-    def sample_participants(
-        self, prior: dict, n: int, seed: int | None = None
-    ) -> list[dict[str, float]]:
-        rng = random.Random(seed)
-        traits_prior = prior["traits"]
-        participants = []
-        for _ in range(n):
-            traits = {
-                name: min(1.0, max(0.0, rng.gauss(spec["mean"], spec["std"])))
-                for name, spec in traits_prior.items()
-            }
-            participants.append(traits)
-        return participants
-
-    def grounding_available(self) -> bool:
-        """True once a real, dataset-backed prior graph is configured
-        (`PERSONA_PRIOR_GRAPH_STORAGE_PATH`) — mirrors Figma OAuth's own "unset
-        disables the feature" pattern (`FigmaOAuthService`, app/core/settings.py)
-        rather than failing hard: unlike a screenshot no model has looked at, there's
-        an honest existing substitute here (`sample_participants`, above), so an
-        unconfigured graph just means falling back to it, not refusing to generate a
-        population at all. This only checks *configuration*, not that the object
-        actually exists in Storage — same as Figma's own check — so a wrong path is a
-        real `StorageError` raised by `sample_grounded_participants` once grounding
-        is actually attempted, not a silent fallback."""
-        return bool(settings.persona_prior_graph_storage_path)
-
     def _to_audience_def(self, definition: dict) -> dict:
         """Adapts a researcher's `AudienceCreate.definition` dict into the prior
         graph's expected shape. Every key here is optional and additive — a
@@ -150,17 +131,17 @@ class AudienceEngine:
 
         return audience_def
 
-    async def sample_grounded_participants(self, definition: dict, n: int, seed: int) -> list[dict]:
-        """Real-data-grounded counterpart to `sample_participants`: same 5 core
-        traits (so `HeuristicParticipantModel` and everything downstream needs no
-        change), plus `identity`/`demographics`/`observed_behavior`/`provenance` —
-        genuinely new pieces with no equivalent in the qualitative-band sampler.
-        Deterministic given `seed`, no model/agent call — same guarantee as
-        `sample_participants` (planning/04-audience-engine.md). Raises
-        `app.core.storage.StorageError` if `grounding_available()` is True but the
-        configured object can't actually be fetched — a misconfigured path is a real
-        error, not silently masked by falling back."""
-        retriever = await _load_retriever(settings.persona_prior_graph_storage_path)
+    async def sample_participants(self, definition: dict, n: int, seed: int) -> list[dict]:
+        """Real-data-grounded participant sampling: the 5 core traits
+        `HeuristicParticipantModel` reads, plus `identity`/`demographics`
+        /`observed_behavior`/`provenance` — genuinely new pieces with no fabricated
+        equivalent. Deterministic given `seed`, no model/agent call
+        (planning/04-audience-engine.md). Raises `RuntimeError` if
+        `PERSONA_PRIOR_GRAPH_STORAGE_PATH` isn't set, or
+        `app.core.storage.StorageError` if it's set but the object can't actually be
+        fetched — population generation has no fabricated substitute to fall back to,
+        so a missing/broken graph is a real error, not silently masked."""
+        retriever = await _load_retriever(_require_graph_storage_path())
         generator = PersonaGenerator(retriever)
         audience_def = self._to_audience_def(definition)
 

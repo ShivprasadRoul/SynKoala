@@ -58,14 +58,10 @@ class AudienceUseCase:
         await self._studies.get_owned(user, study_id)
         audience = await self._audiences.get_latest_for_study(study_id)
 
-        grounded = None
-        if self._engine.grounding_available():
-            grounded = await self._engine.sample_grounded_participants(
-                audience.definition, population_size, seed or 0
-            )
-            traits_list = [g["traits"] for g in grounded]
-        else:
-            traits_list = self._engine.sample_participants(audience.prior, population_size, seed)
+        grounded = await self._engine.sample_participants(
+            audience.definition, population_size, seed or 0
+        )
+        traits_list = [g["traits"] for g in grounded]
 
         tasks = await self._tasks.list_for_study(study_id)
         task = (
@@ -91,15 +87,14 @@ class AudienceUseCase:
                 index=index,
                 task=task,
             )
-            if grounded is not None:
-                # Real-data-grounded identity/demographics/observed_behavior/provenance
-                # overlay PersonaSampler's cosmetic/qualitative-band equivalents —
-                # PersonaSampler's task-grounded mental_model/goal and its
-                # trait-derived behavior/friction/ui_preferences formulas are kept.
-                persona["identity"] = grounded[index]["identity"]
-                persona["demographics"] = grounded[index]["demographics"]
-                persona["observed_behavior"] = grounded[index]["observed_behavior"]
-                persona["provenance"] = grounded[index]["provenance"]
+            # Real-data-grounded identity/demographics/observed_behavior/provenance
+            # overlay PersonaSampler's cosmetic equivalents — PersonaSampler's
+            # task-grounded mental_model/goal and its trait-derived
+            # behavior/friction/ui_preferences formulas are kept.
+            persona["identity"] = grounded[index]["identity"]
+            persona["demographics"] = grounded[index]["demographics"]
+            persona["observed_behavior"] = grounded[index]["observed_behavior"]
+            persona["provenance"] = grounded[index]["provenance"]
             personas.append(persona)
 
         participants = await self._audiences.create_participants(

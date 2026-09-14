@@ -46,13 +46,13 @@ class Settings(BaseSettings):
     # unlike the mid-tier vision/participant-simulation models above.
     insight_model: str = "openrouter:openai/gpt-4o"
 
-    # AudienceEngine's real-data grounding (planning/04-audience-engine.md) — the
-    # compiled audience-prior graph JSON (survey datasets like WVS/Findex, compiled
-    # offline; see app/core/persona_prior/), stored as a private Supabase Storage
-    # object and referenced the same "{bucket}/{path}" way as `screens.image_url`
-    # (app/core/storage.py). Leave unset to disable: audience generation falls back
-    # to the qualitative-band statistical sampler instead of failing at import time,
-    # same as an unset FIGMA_CLIENT_ID above.
+    # AudienceEngine's population generation (planning/04-audience-engine.md,
+    # required) — the compiled audience-prior graph JSON (survey datasets like
+    # WVS/Findex, compiled offline; see app/core/persona_prior/), stored as a private
+    # Supabase Storage object and referenced the same "{bucket}/{path}" way as
+    # `screens.image_url` (app/core/storage.py). Unlike figma_client_id above, there's
+    # no honest fallback if this is unset — AudienceEngine.sample_participants raises
+    # a clear RuntimeError instead of degrading to a fabricated distribution.
     persona_prior_graph_storage_path: str | None = None
 
     @cached_property

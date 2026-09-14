@@ -26,51 +26,12 @@ class _NoOpSession:
         pass
 
 
-async def test_generate_population_samples_one_persona_per_participant():
-    use_case = AudienceUseCase(_NoOpSession())
-    use_case._studies = AsyncMock()
-    use_case._studies.get_owned.return_value = None
-
-    audience = Mock(
-        id=uuid.uuid4(),
-        prior={"traits": {}},
-        definition={"demographics": {"country": "India", "city": "Mumbai", "age_range": [25, 35]}},
-    )
-    use_case._audiences = AsyncMock()
-    use_case._audiences.get_latest_for_study.return_value = audience
-    use_case._audiences.create_participants.return_value = []
-
-    use_case._tasks = AsyncMock()
-    use_case._tasks.list_for_study.return_value = []
-
-    use_case._engine = Mock()
-    use_case._engine.grounding_available.return_value = False
-    use_case._engine.sample_participants.return_value = [_CORE_TRAITS_A, _CORE_TRAITS_B]
-
-    await use_case.generate_population(
-        user=Mock(), study_id=uuid.uuid4(), population_size=2, seed=42
-    )
-
-    use_case._audiences.create_participants.assert_awaited_once()
-    _audience_id, passed_traits, passed_seed, passed_personas = (
-        use_case._audiences.create_participants.await_args.args
-    )
-    assert passed_traits == [_CORE_TRAITS_A, _CORE_TRAITS_B]
-    assert passed_seed == 42
-    assert [p["persona_id"] for p in passed_personas] == ["P-001", "P-002"]
-    # Different core traits must actually produce different behavior, not
-    # 50 clones of the same values.
-    assert (
-        passed_personas[0]["behavior"]["digital_confidence"]
-        != passed_personas[1]["behavior"]["digital_confidence"]
-    )
-
-
-async def test_generate_population_overlays_grounded_fields_when_available():
-    """When AudienceEngine's real-data grounding is configured, the persisted
-    persona should carry the grounded identity/demographics/observed_behavior/
-    provenance instead of PersonaSampler's cosmetic equivalents, while traits/seed
-    still reach AudienceService unchanged in shape."""
+async def test_generate_population_persists_grounded_identity_demographics_and_provenance():
+    """AudienceEngine.sample_participants is the only population-generation path
+    (no qualitative-band fallback) — the persisted persona should carry the grounded
+    identity/demographics/observed_behavior/provenance overlaid onto PersonaSampler's
+    task-grounded output, while traits/seed still reach AudienceService unchanged in
+    shape and each participant still gets a distinct persona."""
     use_case = AudienceUseCase(_NoOpSession())
     use_case._studies = AsyncMock()
     use_case._studies.get_owned.return_value = None
@@ -114,21 +75,25 @@ async def test_generate_population_overlays_grounded_fields_when_available():
         },
     ]
     use_case._engine = Mock()
-    use_case._engine.grounding_available.return_value = True
-    use_case._engine.sample_grounded_participants = AsyncMock(return_value=grounded_result)
+    use_case._engine.sample_participants = AsyncMock(return_value=grounded_result)
 
     await use_case.generate_population(
         user=Mock(), study_id=uuid.uuid4(), population_size=2, seed=42
     )
 
-    use_case._engine.sample_grounded_participants.assert_called_once_with(
-        audience.definition, 2, 42
-    )
+    use_case._engine.sample_participants.assert_called_once_with(audience.definition, 2, 42)
     _audience_id, passed_traits, passed_seed, passed_personas = (
         use_case._audiences.create_participants.await_args.args
     )
     assert passed_traits == [_CORE_TRAITS_A, _CORE_TRAITS_B]
     assert passed_seed == 42
+    assert [p["persona_id"] for p in passed_personas] == ["P-001", "P-002"]
+    # Different core traits must actually produce different behavior, not
+    # 50 clones of the same values.
+    assert (
+        passed_personas[0]["behavior"]["digital_confidence"]
+        != passed_personas[1]["behavior"]["digital_confidence"]
+    )
     for persona, grounded in zip(passed_personas, grounded_result, strict=True):
         assert persona["identity"] == grounded["identity"]
         assert persona["demographics"] == grounded["demographics"]
