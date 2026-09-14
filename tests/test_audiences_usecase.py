@@ -44,6 +44,7 @@ async def test_generate_population_samples_one_persona_per_participant():
     use_case._tasks.list_for_study.return_value = []
 
     use_case._engine = Mock()
+    use_case._engine.grounding_available.return_value = False
     use_case._engine.sample_participants.return_value = [_CORE_TRAITS_A, _CORE_TRAITS_B]
 
     await use_case.generate_population(
@@ -63,6 +64,78 @@ async def test_generate_population_samples_one_persona_per_participant():
         passed_personas[0]["behavior"]["digital_confidence"]
         != passed_personas[1]["behavior"]["digital_confidence"]
     )
+
+
+async def test_generate_population_overlays_grounded_fields_when_available():
+    """When AudienceEngine's real-data grounding is configured, the persisted
+    persona should carry the grounded identity/demographics/observed_behavior/
+    provenance instead of PersonaSampler's cosmetic equivalents, while traits/seed
+    still reach AudienceService unchanged in shape."""
+    use_case = AudienceUseCase(_NoOpSession())
+    use_case._studies = AsyncMock()
+    use_case._studies.get_owned.return_value = None
+
+    audience = Mock(
+        id=uuid.uuid4(),
+        prior={"traits": {}},
+        definition={"country_code": "IND", "region": "Mumbai"},
+    )
+    use_case._audiences = AsyncMock()
+    use_case._audiences.get_latest_for_study.return_value = audience
+    use_case._audiences.create_participants.return_value = []
+
+    use_case._tasks = AsyncMock()
+    use_case._tasks.list_for_study.return_value = []
+
+    grounded_result = [
+        {
+            "traits": _CORE_TRAITS_A,
+            "identity": {
+                "name": "Priya Singh",
+                "age": 29,
+                "occupation": "Clerk",
+                "location": "Mumbai, IND",
+            },
+            "demographics": {"country_code": "IND", "gender": "female"},
+            "observed_behavior": {"internet_usage": 1},
+            "provenance": {"age": {"source": "wvs", "fallback": "country"}},
+        },
+        {
+            "traits": _CORE_TRAITS_B,
+            "identity": {
+                "name": "Arjun Patel",
+                "age": 41,
+                "occupation": "Engineer",
+                "location": "Mumbai, IND",
+            },
+            "demographics": {"country_code": "IND", "gender": "male"},
+            "observed_behavior": {"internet_usage": 0},
+            "provenance": {"age": {"source": "wvs", "fallback": "country"}},
+        },
+    ]
+    use_case._engine = Mock()
+    use_case._engine.grounding_available.return_value = True
+    use_case._engine.sample_grounded_participants.return_value = grounded_result
+
+    await use_case.generate_population(
+        user=Mock(), study_id=uuid.uuid4(), population_size=2, seed=42
+    )
+
+    use_case._engine.sample_grounded_participants.assert_called_once_with(
+        audience.definition, 2, 42
+    )
+    _audience_id, passed_traits, passed_seed, passed_personas = (
+        use_case._audiences.create_participants.await_args.args
+    )
+    assert passed_traits == [_CORE_TRAITS_A, _CORE_TRAITS_B]
+    assert passed_seed == 42
+    for persona, grounded in zip(passed_personas, grounded_result, strict=True):
+        assert persona["identity"] == grounded["identity"]
+        assert persona["demographics"] == grounded["demographics"]
+        assert persona["observed_behavior"] == grounded["observed_behavior"]
+        assert persona["provenance"] == grounded["provenance"]
+        # PersonaSampler's own task-grounded/derived fields are still present.
+        assert "behavior" in persona and "mental_model" in persona
 
 
 async def test_list_participants_returns_every_previously_generated_participant():

@@ -57,7 +57,15 @@ class AudienceUseCase:
     ) -> list[ParticipantRecordModel]:
         await self._studies.get_owned(user, study_id)
         audience = await self._audiences.get_latest_for_study(study_id)
-        traits_list = self._engine.sample_participants(audience.prior, population_size, seed)
+
+        grounded = None
+        if self._engine.grounding_available():
+            grounded = self._engine.sample_grounded_participants(
+                audience.definition, population_size, seed or 0
+            )
+            traits_list = [g["traits"] for g in grounded]
+        else:
+            traits_list = self._engine.sample_participants(audience.prior, population_size, seed)
 
         tasks = await self._tasks.list_for_study(study_id)
         task = (
@@ -74,16 +82,25 @@ class AudienceUseCase:
         # sampling, they just need to be reproducible on their own for the
         # same seed (PRD §7).
         persona_rng = random.Random(seed)
-        personas = [
-            self._persona_sampler.sample(
+        personas = []
+        for index, core_traits in enumerate(traits_list):
+            persona = self._persona_sampler.sample(
                 rng=persona_rng,
                 core_traits=core_traits,
                 definition=audience.definition,
                 index=index,
                 task=task,
             )
-            for index, core_traits in enumerate(traits_list)
-        ]
+            if grounded is not None:
+                # Real-data-grounded identity/demographics/observed_behavior/provenance
+                # overlay PersonaSampler's cosmetic/qualitative-band equivalents —
+                # PersonaSampler's task-grounded mental_model/goal and its
+                # trait-derived behavior/friction/ui_preferences formulas are kept.
+                persona["identity"] = grounded[index]["identity"]
+                persona["demographics"] = grounded[index]["demographics"]
+                persona["observed_behavior"] = grounded[index]["observed_behavior"]
+                persona["provenance"] = grounded[index]["provenance"]
+            personas.append(persona)
 
         participants = await self._audiences.create_participants(
             audience.id, traits_list, seed, personas

@@ -46,6 +46,13 @@ class Settings(BaseSettings):
     # unlike the mid-tier vision/participant-simulation models above.
     insight_model: str = "openrouter:openai/gpt-4o"
 
+    # AudienceEngine's real-data grounding (planning/04-audience-engine.md) — path to
+    # the compiled audience-prior graph JSON (survey datasets like WVS/Findex,
+    # compiled offline; see app/core/persona_prior/). Leave unset to disable: audience
+    # generation falls back to the qualitative-band statistical sampler instead of
+    # failing at import time, same as an unset FIGMA_CLIENT_ID above.
+    persona_prior_graph_path: str | None = None
+
     @cached_property
     def supabase_jwt_issuer(self) -> str:
         return f"{self.supabase_url}/auth/v1"
