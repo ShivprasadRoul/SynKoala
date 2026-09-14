@@ -46,6 +46,13 @@ built APK be pointed at whichever machine is running the backend, without a rebu
   not a navigation library — a half-dozen linear screens don't need one, and it keeps the
   toolchain to just Expo + React Native (no Android Studio/native SDK install required for
   development).
+- `src/tryme/` — an in-app "Try Me" guided demo (Home → "See how it works — guided demo"),
+  mirroring the web landing page's `/try-me`: a spotlight-and-tooltip tour (`TourSpotlight.tsx`,
+  built from plain `View`s measured via `onLayout` — there's no CSS box-shadow-spread trick in
+  React Native) walks through static, illustrative versions of both the creator's defined-path
+  flow and a tester's capture flow. No Supabase auth, backend calls, Figma embed, or audio
+  recording — every value in `data.ts` is fixed, and the "capture" screens tick off a canned
+  step list on a timer rather than reading real prototype interactions.
 
 ## Known risks to verify against a real device/prototype (not exercised in this environment)
 

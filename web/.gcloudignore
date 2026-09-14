@@ -1,0 +1,9 @@
+.git/
+.gitignore
+node_modules/
+.next/
+coverage/
+*.tsbuildinfo
+.env
+.env*.local
+README.md

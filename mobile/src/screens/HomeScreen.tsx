@@ -4,10 +4,11 @@ interface Props {
   onSelectCreator: () => void;
   onSelectTester: () => void;
   onOpenSettings: () => void;
+  onTryMe: () => void;
   apiBaseUrl: string;
 }
 
-export function HomeScreen({ onSelectCreator, onSelectTester, onOpenSettings, apiBaseUrl }: Props) {
+export function HomeScreen({ onSelectCreator, onSelectTester, onOpenSettings, onTryMe, apiBaseUrl }: Props) {
   return (
     <View style={styles.container}>
       <Text style={styles.title}>SynKoala Journey Capture</Text>
@@ -19,6 +20,9 @@ export function HomeScreen({ onSelectCreator, onSelectTester, onOpenSettings, ap
       </TouchableOpacity>
       <TouchableOpacity style={[styles.button, styles.secondary]} onPress={onSelectTester}>
         <Text style={styles.buttonText}>I have a tester code</Text>
+      </TouchableOpacity>
+      <TouchableOpacity onPress={onTryMe}>
+        <Text style={styles.tryMeLink}>See how it works — guided demo</Text>
       </TouchableOpacity>
       <TouchableOpacity onPress={onOpenSettings}>
         <Text style={styles.settingsLink}>Backend: {apiBaseUrl} (tap to change)</Text>
@@ -39,5 +43,6 @@ const styles = StyleSheet.create({
   },
   secondary: { backgroundColor: "#334155" },
   buttonText: { color: "#fff", fontSize: 16, fontWeight: "600" },
+  tryMeLink: { textAlign: "center", color: "#1d4ed8", fontSize: 13, fontWeight: "600", marginTop: 4 },
   settingsLink: { textAlign: "center", color: "#777", fontSize: 12, marginTop: 12 },
 });

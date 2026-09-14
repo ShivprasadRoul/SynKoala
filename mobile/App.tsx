@@ -12,11 +12,13 @@ import { StartTesterSessionScreen } from "./src/screens/StartTesterSessionScreen
 import { TesterCaptureScreen } from "./src/screens/TesterCaptureScreen";
 import { TesterEntryScreen } from "./src/screens/TesterEntryScreen";
 import { getApiBaseUrl, loadSettings } from "./src/settings";
+import { TryMeDemo } from "./src/tryme/TryMeDemo";
 import type { Study, Task } from "./src/types";
 
 type AppScreen =
   | { name: "home" }
   | { name: "settings" }
+  | { name: "tryme" }
   | { name: "creator-login" }
   | { name: "creator-picker"; token: string }
   | { name: "defined-path"; token: string; study: Study; task: Task }
@@ -57,12 +59,16 @@ export default function App() {
             onSelectCreator={() => setScreen({ name: "creator-login" })}
             onSelectTester={() => setScreen({ name: "tester-entry" })}
             onOpenSettings={() => setScreen({ name: "settings" })}
+            onTryMe={() => setScreen({ name: "tryme" })}
             apiBaseUrl={getApiBaseUrl()}
           />
         );
         break;
       case "settings":
         content = <SettingsScreen onDone={() => setScreen({ name: "home" })} />;
+        break;
+      case "tryme":
+        content = <TryMeDemo onExit={() => setScreen({ name: "home" })} />;
         break;
       case "creator-login":
         content = (
